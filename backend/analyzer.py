@@ -1,4 +1,4 @@
-
+from datetime import datetime
 from pathlib import Path
 from collections import Counter
 
@@ -45,6 +45,11 @@ def analyze_packets():
         packet_size = len(packet)
         total_bytes += packet_size
 
+        # Convert the packet's capture timestamp into local time.
+        timestamp = datetime.fromtimestamp(
+            float(packet.time)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+
         # Only analyze packets containing an IPv4 layer.
         if IP not in packet:
             protocol_counts["Other"] += 1
@@ -54,13 +59,25 @@ def analyze_packets():
         source_ip = packet[IP].src
         destination_ip = packet[IP].dst
 
-        # Identify the packet's transport protocol.
+        # Determine the packet's protocol and extract port information.
+        source_port = None
+        destination_port = None
+        tcp_flags = None
+
         if TCP in packet:
             protocol = "TCP"
+            source_port = packet[TCP].sport
+            destination_port = packet[TCP].dport
+            tcp_flags = str(packet[TCP].flags)
+
         elif UDP in packet:
             protocol = "UDP"
+            source_port = packet[UDP].sport
+            destination_port = packet[UDP].dport
+
         elif ICMP in packet:
             protocol = "ICMP"
+
         else:
             protocol = "Other"
 
@@ -75,13 +92,26 @@ def analyze_packets():
         unique_source_ips.add(source_ip)
         unique_destination_ips.add(destination_ip)
 
-        # Display the individual packet information.
+
+        # Display detailed packet information.
         print(f"Packet {i}")
+        print(f"Timestamp:      {timestamp}")
         print(f"Source IP:      {source_ip}")
         print(f"Destination IP: {destination_ip}")
         print(f"Protocol:       {protocol}")
+
+        # TCP and UDP packets contain port numbers.
+        if source_port is not None:
+            print(f"Source Port:    {source_port}")
+            print(f"Destination Port: {destination_port}")
+
+        # TCP packets also contain flags.
+        if tcp_flags is not None:
+            print(f"TCP Flags:      {tcp_flags}")
+
         print(f"Packet Size:    {packet_size} bytes")
         print("-" * 40)
+
 
     # Display our final network traffic statistics.
     print("\n===== NetScope Traffic Summary =====")
