@@ -94,6 +94,36 @@ def start_live_capture(interface, max_packets, timeout, protocol):
     )
 
 
+    # Display the total bytes captured for each protocol.
+    print("\nBytes by Protocol:")
+
+    for protocol, byte_count in sorted(
+        statistics["protocol_bytes"].items()
+    ):
+        print(f"{protocol}: {byte_count:,} bytes")
+
+    # Display the most commonly used destination ports.
+    print("\nTop Destination Ports:")
+
+    if statistics["top_destination_ports"]:
+        for port, count in statistics["top_destination_ports"]:
+            print(f"Port {port}: {count} packets")
+    else:
+        print("No TCP or UDP destination ports found.")
+
+    # Display network activity grouped by second.
+    print("\nTraffic Over Time:")
+
+    if statistics["traffic_over_time"]:
+        for timestamp, data in statistics["traffic_over_time"].items():
+            print(
+                f"{timestamp} | "
+                f"{data['packets']} packets | "
+                f"{data['bytes']:,} bytes"
+            )
+    else:
+        print("No IPv4 traffic recorded.")
+
 if __name__ == "__main__":
     # Define command-line arguments.
     parser = argparse.ArgumentParser(

@@ -78,6 +78,30 @@ def analyze_packets():
     for ip, count in statistics["top_source_ips"]:
         print(f"{ip}: {count} packets")
 
+    
+    # Display bytes transferred by each protocol.
+    print("\nBytes by Protocol:")
+
+    for protocol, byte_count in sorted(
+        statistics["protocol_bytes"].items()
+    ):
+        print(f"{protocol}: {byte_count:,} bytes")
+
+    # Display the most frequently used destination ports.
+    print("\nTop Destination Ports:")
+
+    for port, count in statistics["top_destination_ports"]:
+        print(f"Port {port}: {count} packets")
+
+    # Display traffic aggregated by second.
+    print("\nTraffic Over Time:")
+
+    for timestamp, data in statistics["traffic_over_time"].items():
+        print(
+            f"{timestamp} | "
+            f"{data['packets']} packets | "
+            f"{data['bytes']:,} bytes"
+        )
 
 if __name__ == "__main__":
     analyze_packets()

@@ -50,31 +50,73 @@ def packet_to_dict(packet):
 
 
 def calculate_statistics(packet_records):
-    # Count protocols and source IP addresses.
+    # Count packets by protocol and source IP.
     protocol_counts = Counter()
     source_ip_counts = Counter()
 
-    # Track unique addresses.
+    # Track the total bytes for each protocol.
+    protocol_bytes = Counter()
+
+    # Track frequently used destination ports.
+    destination_port_counts = Counter()
+
+    # Group traffic into one-second intervals.
+    traffic_over_time = {}
+
+    # Track unique source and destination IP addresses.
     unique_source_ips = set()
     unique_destination_ips = set()
 
+    # Track the total bytes across all packets.
     total_bytes = 0
 
+    # Process every packet record.
     for packet in packet_records:
-        total_bytes += packet["size"]
+        protocol = packet["protocol"]
+        source_ip = packet["source_ip"]
+        destination_ip = packet["destination_ip"]
+        packet_size = packet["size"]
+        destination_port = packet["destination_port"]
 
-        protocol_counts[packet["protocol"]] += 1
-        source_ip_counts[packet["source_ip"]] += 1
+        # Update general traffic statistics.
+        total_bytes += packet_size
+        protocol_counts[protocol] += 1
+        protocol_bytes[protocol] += packet_size
+        source_ip_counts[source_ip] += 1
 
-        unique_source_ips.add(packet["source_ip"])
-        unique_destination_ips.add(packet["destination_ip"])
+        # Store unique IP addresses.
+        unique_source_ips.add(source_ip)
+        unique_destination_ips.add(destination_ip)
 
-    # Return statistics in a structured format.
+        # Count destination ports for TCP and UDP packets.
+        if destination_port is not None:
+            destination_port_counts[destination_port] += 1
+
+        # Group packets by their timestamp (one-second intervals).
+        second = packet["timestamp"][:19]
+
+        # Create an entry if this second hasn't been seen.
+        if second not in traffic_over_time:
+            traffic_over_time[second] = {
+                "packets": 0,
+                "bytes": 0,
+            }
+
+        # Update packets and bytes for this second.
+        traffic_over_time[second]["packets"] += 1
+        traffic_over_time[second]["bytes"] += packet_size
+
+    # Return all calculated statistics.
     return {
         "total_packets": len(packet_records),
         "total_bytes": total_bytes,
         "protocol_counts": dict(protocol_counts),
+        "protocol_bytes": dict(protocol_bytes),
         "unique_source_ips": len(unique_source_ips),
         "unique_destination_ips": len(unique_destination_ips),
         "top_source_ips": source_ip_counts.most_common(5),
+        "top_destination_ports": destination_port_counts.most_common(5),
+        "traffic_over_time": dict(
+            sorted(traffic_over_time.items())
+        ),
     }
