@@ -1,21 +1,23 @@
-# Python virtual environment
+# Python
 .venv/
-
-# Python cache files
-.pytest_cache/
 __pycache__/
 *.pyc
+.pytest_cache/
 
-# Network capture files (may contain sensitive data)
+# Sensitive network capture files
 *.pcap
 *.pcapng
 
-# Environment variables and secrets
+# Environment variables
 .env
 .env.*
 
-# macOS files
+# React / Node.js
+node_modules/
+dist/
+
+# macOS
 .DS_Store
 
-# VSCode local settings
+# VSCode
 .vscode/
