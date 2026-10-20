@@ -372,3 +372,19 @@ tbody tr:hover {
     font-size: 22px;
   }
 }
+
+/* Recharts containers */
+
+.chart-wrapper {
+  width: 100%;
+  height: 280px;
+  min-width: 0;
+}
+
+.chart-wrapper .recharts-legend-item-text {
+  color: #cbd5e1 !important;
+}
+
+.chart-wrapper .recharts-tooltip-label {
+  color: #f1f5f9;
+}

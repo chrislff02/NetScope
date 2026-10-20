@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 
 import {
   Activity,
-  ChartNoAxesCombined,
   CircleAlert,
   Database,
   HardDriveDownload,
@@ -22,6 +21,9 @@ import {
 } from "./services/api";
 
 import "./App.css";
+
+import TrafficChart from "./components/TrafficChart";
+import ProtocolChart from "./components/ProtocolChart";
 
 const navigation = [
   { label: "Dashboard", icon: LayoutDashboard },
@@ -206,38 +208,42 @@ function App() {
               })}
             </section>
 
-            {/* Chart placeholders */}
+            {/* Network traffic charts */}
             <section className="charts-grid">
+              {/* Traffic over time */}
               <div className="panel">
                 <div className="panel-header">
                   <div>
                     <h3>Network Traffic</h3>
-                    <p>Traffic activity over time</p>
+                    <p>Bytes analyzed per second</p>
                   </div>
-
-                  <ChartNoAxesCombined size={20} />
                 </div>
 
-                <div className="chart-placeholder">
-                  <Activity size={35} />
-                  <p>Network traffic chart</p>
-                  <span>Coming in Phase 5.4</span>
-                </div>
+                {summary ? (
+                  <TrafficChart traffic={summary.traffic_over_time} />
+                ) : (
+                  <div className="chart-placeholder">
+                    <p>Waiting for traffic data...</p>
+                  </div>
+                )}
               </div>
 
+              {/* Protocol distribution */}
               <div className="panel">
                 <div className="panel-header">
                   <div>
                     <h3>Protocol Distribution</h3>
-                    <p>Traffic by protocol</p>
+                    <p>Packets grouped by protocol</p>
                   </div>
                 </div>
 
-                <div className="chart-placeholder">
-                  <Network size={35} />
-                  <p>Protocol distribution chart</p>
-                  <span>Coming in Phase 5.4</span>
-                </div>
+                {summary ? (
+                  <ProtocolChart protocols={summary.protocol_counts} />
+                ) : (
+                  <div className="chart-placeholder">
+                    <p>Waiting for protocol data...</p>
+                  </div>
+                )}
               </div>
             </section>
 
