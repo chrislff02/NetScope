@@ -1,17 +1,25 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
 import {
   Activity,
-  ArrowDownRight,
-  ArrowUpRight,
   ChartNoAxesCombined,
   CircleAlert,
   Database,
+  HardDriveDownload,
   LayoutDashboard,
   Network,
   Radio,
   Settings,
-  ShieldCheck,
+  Users,
+  Globe,
 } from "lucide-react";
+
+import {
+  getTrafficSummary,
+  getPackets,
+  type Packet,
+  type TrafficSummary,
+} from "./services/api";
 
 import "./App.css";
 
@@ -23,71 +31,93 @@ const navigation = [
   { label: "Settings", icon: Settings },
 ];
 
-const statistics = [
-  {
-    label: "Total Packets",
-    value: "24,891",
-    detail: "Packets analyzed",
-    icon: Network,
-  },
-  {
-    label: "Download",
-    value: "2.4 MB/s",
-    detail: "Sample traffic rate",
-    icon: ArrowDownRight,
-  },
-  {
-    label: "Upload",
-    value: "842 KB/s",
-    detail: "Sample traffic rate",
-    icon: ArrowUpRight,
-  },
-  {
-    label: "Security Alerts",
-    value: "3",
-    detail: "Sample alerts",
-    icon: ShieldCheck,
-  },
-];
-
-const samplePackets = [
-  {
-    time: "09:31:42",
-    source: "192.168.1.10",
-    destination: "8.8.8.8",
-    protocol: "UDP",
-    size: 128,
-  },
-  {
-    time: "09:31:41",
-    source: "192.168.1.10",
-    destination: "142.250.80.46",
-    protocol: "TCP",
-    size: 1472,
-  },
-  {
-    time: "09:31:40",
-    source: "104.18.21.21",
-    destination: "192.168.1.10",
-    protocol: "TCP",
-    size: 1284,
-  },
-  {
-    time: "09:31:39",
-    source: "192.168.1.10",
-    destination: "1.1.1.1",
-    protocol: "ICMP",
-    size: 84,
-  },
-];
-
 function App() {
-  // Track which sidebar page is selected.
+  // Track the selected sidebar page.
   const [activePage, setActivePage] = useState("Dashboard");
+
+  // Store network information returned by FastAPI.
+  const [summary, setSummary] = useState<TrafficSummary | null>(null);
+
+  const [packets, setPackets] = useState<Packet[]>([]);
+
+  // Track loading and error states.
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Retrieve data when the dashboard first loads.
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadDashboardData() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const [summaryData, packetData] = await Promise.all([
+          getTrafficSummary(controller.signal),
+          getPackets(controller.signal),
+        ]);
+
+        if (!controller.signal.aborted) {
+          setSummary(summaryData);
+          setPackets(packetData.packets);
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Unable to load network traffic.",
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadDashboardData();
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  // Build statistic cards using API data.
+  const statistics = [
+    {
+      label: "Total Packets",
+      value: summary?.total_packets.toLocaleString() ?? "—",
+      detail: "IPv4 packets analyzed",
+      icon: Network,
+    },
+    {
+      label: "Total Bytes",
+      value: summary?.total_bytes.toLocaleString() ?? "—",
+      detail: "Bytes analyzed",
+      icon: HardDriveDownload,
+    },
+    {
+      label: "Unique Source IPs",
+      value: summary?.unique_source_ips.toString() ?? "—",
+      detail: "Distinct source addresses",
+      icon: Users,
+    },
+    {
+      label: "Unique Destination IPs",
+      value: summary?.unique_destination_ips.toString() ?? "—",
+      detail: "Distinct destination addresses",
+      icon: Globe,
+    },
+  ];
+
+  // Show the newest five packet records first.
+  const recentPackets = packets.slice(-5).reverse();
 
   return (
     <div className="app-container">
-      {/* Sidebar navigation */}
+      {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-logo">
           <Network size={28} />
@@ -118,32 +148,46 @@ function App() {
         <div className="sidebar-footer">
           <div className="system-status">
             <span className="status-dot" />
-            Demo Mode
+            Saved Capture Mode
           </div>
+
           <p>NetScope v0.1.0</p>
         </div>
       </aside>
 
-      {/* Main dashboard */}
+      {/* Main content */}
       <main className="main-content">
         <header className="dashboard-header">
           <div>
             <p className="eyebrow">NETWORK MONITORING</p>
+
             <h1>{activePage}</h1>
-            <p className="subtitle">Monitor and analyze network activity.</p>
+
+            <p className="subtitle">
+              Analyze network traffic and protocol activity.
+            </p>
           </div>
 
           <div className="header-actions">
             <span className="demo-indicator">
               <Radio size={15} />
-              Demo Data
+              Saved PCAP Data
             </span>
           </div>
         </header>
 
+        {/* API status */}
+        {loading && <p role="status">Loading network traffic...</p>}
+
+        {error && (
+          <p role="alert" style={{ color: "#fca5a5" }}>
+            Unable to load data: {error}
+          </p>
+        )}
+
         {activePage === "Dashboard" ? (
           <>
-            {/* Network statistics */}
+            {/* Statistics cards */}
             <section className="stats-grid">
               {statistics.map((stat) => {
                 const Icon = stat.icon;
@@ -170,6 +214,7 @@ function App() {
                     <h3>Network Traffic</h3>
                     <p>Traffic activity over time</p>
                   </div>
+
                   <ChartNoAxesCombined size={20} />
                 </div>
 
@@ -196,12 +241,12 @@ function App() {
               </div>
             </section>
 
-            {/* Recent packet table */}
+            {/* Recent packets */}
             <section className="panel packet-panel">
               <div className="panel-header">
                 <div>
                   <h3>Recent Packets</h3>
-                  <p>Sample network packet records</p>
+                  <p>Packet records from the saved capture</p>
                 </div>
               </div>
 
@@ -218,11 +263,14 @@ function App() {
                   </thead>
 
                   <tbody>
-                    {samplePackets.map((packet, index) => (
+                    {recentPackets.map((packet, index) => (
                       <tr key={index}>
-                        <td>{packet.time}</td>
-                        <td>{packet.source}</td>
-                        <td>{packet.destination}</td>
+                        <td>{packet.timestamp.slice(11, 19)}</td>
+
+                        <td>{packet.source_ip}</td>
+
+                        <td>{packet.destination_ip}</td>
+
                         <td>
                           <span
                             className={`protocol-badge ${packet.protocol.toLowerCase()}`}
@@ -230,11 +278,16 @@ function App() {
                             {packet.protocol}
                           </span>
                         </td>
+
                         <td>{packet.size} B</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+
+                {!loading && !error && recentPackets.length === 0 && (
+                  <p>No packets available.</p>
+                )}
               </div>
             </section>
           </>
