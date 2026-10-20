@@ -388,3 +388,190 @@ tbody tr:hover {
 .chart-wrapper .recharts-tooltip-label {
   color: #f1f5f9;
 }
+
+/* Packet Explorer */
+
+.packet-explorer {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.explorer-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 220px;
+  max-width: 460px;
+  padding: 12px 14px;
+  background: #0b1120;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  color: #94a3b8;
+}
+
+.search-box:focus-within {
+  border-color: #60a5fa;
+}
+
+.search-box input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #f1f5f9;
+  width: 100%;
+  font-size: 13px;
+}
+
+.search-box input::placeholder {
+  color: #64748b;
+}
+
+.protocol-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-button {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  color: #94a3b8;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.filter-button:hover {
+  color: #f1f5f9;
+}
+
+.filter-button.selected {
+  background: #1d3559;
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+
+.explorer-summary {
+  display: flex;
+  justify-content: space-between;
+  color: #94a3b8;
+  font-size: 12px;
+  margin-bottom: 15px;
+}
+
+.clickable-row {
+  cursor: pointer;
+}
+
+.clickable-row:hover {
+  background: #25334b;
+}
+
+.explorer-empty {
+  padding: 45px;
+  text-align: center;
+  color: #94a3b8;
+}
+
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.pagination-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.pagination-buttons button,
+.details-header button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  padding: 8px;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.pagination-buttons button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Packet details */
+
+.details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.details-header h3 {
+  margin: 0;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.details-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.details-grid span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.details-grid strong {
+  color: #f1f5f9;
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1100px) {
+  .details-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .details-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .explorer-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .search-box {
+    max-width: none;
+  }
+}

@@ -25,9 +25,11 @@ import "./App.css";
 import TrafficChart from "./components/TrafficChart";
 import ProtocolChart from "./components/ProtocolChart";
 
+import PacketExplorer from "./components/PacketExplorer";
+
 const navigation = [
   { label: "Dashboard", icon: LayoutDashboard },
-  { label: "Live Packets", icon: Activity },
+  { label: "Packet Explorer", icon: Activity },
   { label: "Traffic History", icon: Database },
   { label: "Security Alerts", icon: CircleAlert },
   { label: "Settings", icon: Settings },
@@ -297,6 +299,8 @@ function App() {
               </div>
             </section>
           </>
+        ) : activePage === "Packet Explorer" ? (
+          <PacketExplorer packets={packets} />
         ) : (
           <section className="panel empty-page">
             <Database size={42} />
