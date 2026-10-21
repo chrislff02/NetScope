@@ -27,9 +27,12 @@ import ProtocolChart from "./components/ProtocolChart";
 
 import PacketExplorer from "./components/PacketExplorer";
 
+import LiveCapture from "./components/LiveCapture";
+
 const navigation = [
   { label: "Dashboard", icon: LayoutDashboard },
   { label: "Packet Explorer", icon: Activity },
+  { label: "Live Capture", icon: Radio },
   { label: "Traffic History", icon: Database },
   { label: "Security Alerts", icon: CircleAlert },
   { label: "Settings", icon: Settings },
@@ -301,6 +304,8 @@ function App() {
           </>
         ) : activePage === "Packet Explorer" ? (
           <PacketExplorer packets={packets} />
+        ) : activePage === "Live Capture" ? (
+          <LiveCapture />
         ) : (
           <section className="panel empty-page">
             <Database size={42} />

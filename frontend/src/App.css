@@ -575,3 +575,73 @@ tbody tr:hover {
     max-width: none;
   }
 }
+
+/* Live Capture page */
+
+.live-capture-page {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.capture-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.capture-toolbar h2 {
+  margin: 0 0 8px;
+  font-size: 19px;
+}
+
+.capture-toolbar p,
+.capture-packets-heading p {
+  color: #94a3b8;
+  margin: 0;
+  font-size: 13px;
+}
+
+.capture-refresh-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 16px;
+  background: #1d3559;
+  color: #93c5fd;
+  border: 1px solid #3b82f6;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.capture-refresh-button:hover {
+  background: #284b7c;
+}
+
+.capture-refresh-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.capture-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding: 14px 18px;
+  background: #151e30;
+  border: 1px solid #293449;
+  border-radius: 9px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.capture-error {
+  color: #fca5a5;
+}
+
+.capture-packets-heading h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}

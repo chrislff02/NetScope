@@ -49,3 +49,16 @@ export function getTrafficSummary(signal?: AbortSignal) {
 export function getPackets(signal?: AbortSignal) {
   return fetchJSON<PacketResponse>("/api/traffic/packets", signal);
 }
+
+export interface LiveCapture {
+  source: string;
+  interface: string;
+  raw_packets_captured: number;
+  packets: Packet[];
+  statistics: TrafficSummary;
+}
+
+// Retrieve the most recently completed live capture.
+export function getLatestCapture(signal?: AbortSignal) {
+  return fetchJSON<LiveCapture>("/api/capture/latest", signal);
+}
