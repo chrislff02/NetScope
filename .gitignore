@@ -21,3 +21,6 @@ dist/
 
 # VSCode
 .vscode/
+
+# Local network capture output
+data/

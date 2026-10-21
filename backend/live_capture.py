@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 import argparse
 
 from scapy.all import sniff, conf
@@ -7,6 +9,12 @@ from traffic_analysis import (
     packet_to_dict,
     calculate_statistics,
 )
+
+# Locate the main NetScope project directory.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Store local capture metadata outside of Git.
+CAPTURE_OUTPUT = BASE_DIR / "data" / "live_capture.json"
 
 
 def start_live_capture(interface, max_packets, timeout, protocol):
@@ -70,6 +78,29 @@ def start_live_capture(interface, max_packets, timeout, protocol):
 
     # Generate our traffic summary.
     statistics = calculate_statistics(packet_records)
+
+
+    # Create the output directory if necessary.
+    CAPTURE_OUTPUT.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    # Combine captured packets with their statistics.
+    capture_data = {
+        "source": "live_capture",
+        "interface": str(interface),
+        "raw_packets_captured": raw_packet_count,
+        "packets": packet_records,
+        "statistics": statistics,
+    }
+
+    # Save the packet metadata in JSON format.
+    with open(CAPTURE_OUTPUT, "w", encoding="utf-8") as file:
+        json.dump(capture_data, file, indent=2)
+
+    print(f"\nCapture data saved to: {CAPTURE_OUTPUT}")
+
 
     print("\n===== NetScope Live Traffic Summary =====")
     print(f"Raw Packets Captured: {raw_packet_count}")
