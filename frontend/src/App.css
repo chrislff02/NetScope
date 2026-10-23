@@ -645,3 +645,38 @@ tbody tr:hover {
   margin: 0 0 8px;
   font-size: 16px;
 }
+
+/* Live WebSocket Stream */
+
+.live-stream-page {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.stream-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.stream-stop-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 16px;
+  background: #45252d;
+  color: #fca5a5;
+  border: 1px solid #7f303b;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.stream-stop-button:hover:not(:disabled) {
+  background: #60303b;
+}
+
+.stream-stop-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

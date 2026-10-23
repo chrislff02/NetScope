@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import LiveTrafficStream from "./components/LiveTrafficStream";
 
 import {
   Activity,
@@ -33,6 +34,7 @@ const navigation = [
   { label: "Dashboard", icon: LayoutDashboard },
   { label: "Packet Explorer", icon: Activity },
   { label: "Live Capture", icon: Radio },
+  { label: "Live Stream", icon: Activity },
   { label: "Traffic History", icon: Database },
   { label: "Security Alerts", icon: CircleAlert },
   { label: "Settings", icon: Settings },
@@ -306,6 +308,8 @@ function App() {
           <PacketExplorer packets={packets} />
         ) : activePage === "Live Capture" ? (
           <LiveCapture />
+        ) : activePage === "Live Stream" ? (
+          <LiveTrafficStream />
         ) : (
           <section className="panel empty-page">
             <Database size={42} />
