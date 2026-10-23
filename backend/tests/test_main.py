@@ -142,3 +142,30 @@ def test_missing_pcap_file(monkeypatch, tmp_path):
     assert response.json()["detail"] == (
         "Sample PCAP file not found."
     )
+
+
+def test_websocket_traffic_stream():
+    # Open a test connection to our WebSocket.
+    with client.websocket_connect("/ws/traffic") as websocket:
+        # Verify all five synthetic packet events.
+        for expected_sequence in range(1, 6):
+            message = websocket.receive_json()
+
+            assert message["event"] == "packet"
+            assert message["sequence"] == expected_sequence
+
+            packet = message["data"]
+
+            assert packet["protocol"] in {"TCP", "UDP", "ICMP"}
+            assert packet["source_ip"] == "192.0.2.10"
+            assert packet["destination_ip"] == "198.51.100.10"
+            assert packet["size"] > 0
+            assert "timestamp" in packet
+
+        # Verify the completion message.
+        completion = websocket.receive_json()
+
+        assert completion == {
+            "event": "complete",
+            "packets_sent": 5,
+        }

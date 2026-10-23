@@ -2,7 +2,17 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+)
+
+import asyncio
+from datetime import datetime, timezone
+
 from scapy.all import rdpcap
 
 from traffic_analysis import (
@@ -128,3 +138,94 @@ def get_latest_capture():
 
     # Return packet metadata and statistics.
     return capture_data
+
+
+# Synthetic packets used to test real-time streaming.
+DEMO_PACKETS = [
+    {
+        "protocol": "TCP",
+        "source_port": 50000,
+        "destination_port": 443,
+        "tcp_flags": "S",
+        "size": 120,
+    },
+    {
+        "protocol": "UDP",
+        "source_port": 53000,
+        "destination_port": 53,
+        "tcp_flags": None,
+        "size": 98,
+    },
+    {
+        "protocol": "ICMP",
+        "source_port": None,
+        "destination_port": None,
+        "tcp_flags": None,
+        "size": 84,
+    },
+    {
+        "protocol": "TCP",
+        "source_port": 50001,
+        "destination_port": 80,
+        "tcp_flags": "A",
+        "size": 256,
+    },
+    {
+        "protocol": "UDP",
+        "source_port": 53001,
+        "destination_port": 443,
+        "tcp_flags": None,
+        "size": 144,
+    },
+]
+
+
+@app.websocket("/ws/traffic")
+async def stream_traffic(websocket: WebSocket):
+    """
+    Stream five synthetic packet events to a client.
+
+    This endpoint does not capture real traffic.
+    """
+    await websocket.accept()
+
+    print("WebSocket client connected.")
+
+    try:
+        for index, sample in enumerate(DEMO_PACKETS):
+            # Generate a UTC timestamp for this event.
+            timestamp = datetime.now(
+                timezone.utc
+            ).isoformat(timespec="milliseconds")
+
+            # Use documentation-only IP addresses.
+            packet = {
+                "timestamp": timestamp,
+                "source_ip": "192.0.2.10",
+                "destination_ip": "198.51.100.10",
+                **sample,
+            }
+
+            # Send structured packet data to the client.
+            await websocket.send_json({
+                "event": "packet",
+                "sequence": index + 1,
+                "data": packet,
+            })
+
+            # Simulate a short interval between packets.
+            await asyncio.sleep(0.5)
+
+        # Inform the client that the demo stream finished.
+        await websocket.send_json({
+            "event": "complete",
+            "packets_sent": len(DEMO_PACKETS),
+        })
+
+        await websocket.close()
+
+    except WebSocketDisconnect:
+        print("WebSocket client disconnected.")
+
+    finally:
+        print("WebSocket streaming session ended.")
