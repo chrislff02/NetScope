@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 import argparse
+import os
+import tempfile
 
 from scapy.all import sniff, conf
 from scapy.error import Scapy_Exception
@@ -16,6 +18,70 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Store local capture metadata outside of Git.
 CAPTURE_OUTPUT = BASE_DIR / "data" / "live_capture.json"
 
+
+def save_capture_data(capture_data):
+    """
+    Save completed capture metadata securely.
+
+    When the capture runs with sudo, transfer ownership
+    of the output file to the user who started it.
+    """
+
+    # Ensure the output directory exists.
+    CAPTURE_OUTPUT.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+        mode=0o700,
+    )
+
+    # Identify the original user when running with sudo.
+    sudo_uid = os.environ.get("SUDO_UID")
+    sudo_gid = os.environ.get("SUDO_GID")
+
+    # Create a temporary file in the same directory.
+    # This lets us replace the capture file atomically.
+    temporary_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=CAPTURE_OUTPUT.parent,
+            prefix=".capture-",
+            suffix=".tmp",
+            delete=False,
+        ) as file:
+            temporary_path = Path(file.name)
+
+            # Restrict file access to its owner.
+            os.fchmod(file.fileno(), 0o600)
+
+            # If running with sudo, assign ownership
+            # to the original non-root user.
+            if (
+                os.geteuid() == 0
+                and sudo_uid is not None
+                and sudo_gid is not None
+            ):
+                os.fchown(
+                    file.fileno(),
+                    int(sudo_uid),
+                    int(sudo_gid),
+                )
+
+            # Write packet metadata to the temporary file.
+            json.dump(capture_data, file, indent=2)
+
+        # Replace the previous capture only after the
+        # new JSON file has been written successfully.
+        os.replace(temporary_path, CAPTURE_OUTPUT)
+
+        print(f"\nCapture data saved to: {CAPTURE_OUTPUT}")
+
+    finally:
+        # Remove the temporary file if something failed.
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 def start_live_capture(interface, max_packets, timeout, protocol):
     # Store structured IPv4 packet data.
@@ -80,11 +146,22 @@ def start_live_capture(interface, max_packets, timeout, protocol):
     statistics = calculate_statistics(packet_records)
 
 
-    # Create the output directory if necessary.
-    CAPTURE_OUTPUT.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    
+    # Calculate statistics from captured packet metadata.
+    statistics = calculate_statistics(packet_records)
+
+    # Prepare the completed recording for export.
+    capture_data = {
+        "source": "live_capture",
+        "interface": str(interface),
+        "raw_packets_captured": raw_packet_count,
+        "packets": packet_records,
+        "statistics": statistics,
+    }
+
+    # Save the recording with appropriate file ownership.
+    save_capture_data(capture_data)
+
 
     # Combine captured packets with their statistics.
     capture_data = {
