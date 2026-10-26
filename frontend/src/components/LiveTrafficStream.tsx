@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Play, Square, Radio } from "lucide-react";
 
 import type { Packet } from "../services/api";
 import PacketExplorer from "./PacketExplorer";
+
+import TrafficChart from "./TrafficChart";
+import ProtocolChart from "./ProtocolChart";
 
 type StreamStatus =
   | "Disconnected"
@@ -132,6 +135,54 @@ function LiveTrafficStream() {
 
   const totalBytes = packets.reduce((total, packet) => total + packet.size, 0);
 
+  // Count received packets by protocol.
+  const protocolCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+
+    for (const packet of packets) {
+      const protocol = packet.protocol;
+
+      // Initialize the protocol count if needed.
+      if (!(protocol in counts)) {
+        counts[protocol] = 0;
+      }
+
+      // Count this packet.
+      counts[protocol] += 1;
+    }
+
+    return counts;
+  }, [packets]);
+
+  // Group incoming packets into one-second intervals.
+  const trafficOverTime = useMemo(() => {
+    const timeline: Record<string, { packets: number; bytes: number }> = {};
+
+    for (const packet of packets) {
+      // Remove milliseconds to group by second.
+      const second = packet.timestamp.slice(0, 19);
+
+      // Create the time interval when first encountered.
+      if (!timeline[second]) {
+        timeline[second] = {
+          packets: 0,
+          bytes: 0,
+        };
+      }
+
+      // Update the number of packets and bytes.
+      timeline[second].packets += 1;
+      timeline[second].bytes += packet.size;
+    }
+
+    // Keep timeline entries in chronological order.
+    return Object.fromEntries(
+      Object.entries(timeline).sort(([first], [second]) =>
+        first.localeCompare(second),
+      ),
+    );
+  }, [packets]);
+
   return (
     <div className="live-stream-page">
       <div className="capture-toolbar">
@@ -192,6 +243,47 @@ function LiveTrafficStream() {
           </div>
           <h2>{packetsSent}</h2>
           <p>Reported after demo completion</p>
+        </div>
+      </section>
+
+      {/* Charts that update when WebSocket packets arrive */}
+      <section className="charts-grid">
+        {/* Traffic volume over time */}
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <h3>Streaming Network Traffic</h3>
+              <p>Received bytes per second</p>
+            </div>
+          </div>
+
+          {packets.length > 0 ? (
+            <TrafficChart traffic={trafficOverTime} />
+          ) : (
+            <div className="chart-placeholder">
+              <p>No streaming traffic yet.</p>
+              <span>Start the demo stream to see network activity.</span>
+            </div>
+          )}
+        </div>
+
+        {/* Packet distribution by network protocol */}
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <h3>Live Protocol Distribution</h3>
+              <p>Packets received by protocol</p>
+            </div>
+          </div>
+
+          {packets.length > 0 ? (
+            <ProtocolChart protocols={protocolCounts} />
+          ) : (
+            <div className="chart-placeholder">
+              <p>No protocol data yet.</p>
+              <span>Protocol statistics will appear during streaming.</span>
+            </div>
+          )}
         </div>
       </section>
 
