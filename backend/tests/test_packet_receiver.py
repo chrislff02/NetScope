@@ -22,6 +22,7 @@ from packet_receiver import (
     remove_owned_socket,
     start_receiver,
     SOCKET_PATH,
+    make_limited_handler
 )
 
 
@@ -440,3 +441,140 @@ def test_existing_socket_cannot_be_replaced(monkeypatch):
                 current_info.st_dev,
                 current_info.st_ino,
             ) == original_identity
+
+
+@pytest.mark.parametrize(
+    "limit",
+    [
+        0,
+        -1,
+        True,
+    ],
+)
+def test_invalid_connection_limit(limit):
+    """
+    Reject connection limits that are not
+    positive integers.
+    """
+
+    with pytest.raises(ValueError):
+        make_limited_handler(limit)
+
+
+
+def test_unix_socket_connection_limit(sample_packet):
+    """
+    Verify that a busy receiver rejects extra clients
+    and accepts new clients after a slot is released.
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "test.sock"
+
+        async def run_test():
+            # Allow only one active connection.
+            server = await asyncio.start_unix_server(
+                make_limited_handler(max_connections=1),
+                path=str(socket_path),
+                limit=4097,
+            )
+
+            try:
+                # First client connects but sends no message.
+                first_reader, first_writer = (
+                    await asyncio.open_unix_connection(
+                        str(socket_path)
+                    )
+                )
+
+                try:
+                    # Allow the receiver to register this client.
+                    await asyncio.sleep(0.05)
+
+                    # Second client connects while the first
+                    # still occupies the only available slot.
+                    second_reader, second_writer = (
+                        await asyncio.open_unix_connection(
+                            str(socket_path)
+                        )
+                    )
+
+                    try:
+                        response = await asyncio.wait_for(
+                            second_reader.readline(),
+                            timeout=2,
+                        )
+
+                        assert json.loads(response) == {
+                            "status": "busy"
+                        }
+
+                    finally:
+                        second_writer.close()
+                        await second_writer.wait_closed()
+
+                    # Finish the first client's message.
+                    message = json.dumps(sample_packet) + "\n"
+
+                    first_writer.write(message.encode("utf-8"))
+                    await first_writer.drain()
+
+                    response = await asyncio.wait_for(
+                        first_reader.readline(),
+                        timeout=2,
+                    )
+
+                    assert json.loads(response) == {
+                        "status": "accepted"
+                    }
+
+                finally:
+                    first_writer.close()
+                    await first_writer.wait_closed()
+
+                # Wait for the receiver to close the first
+                # connection and release its slot.
+                await asyncio.wait_for(
+                    first_reader.read(),
+                    timeout=2,
+                )
+                await asyncio.sleep(0)
+
+                # A third client should now be accepted.
+                third_reader, third_writer = (
+                    await asyncio.open_unix_connection(
+                        str(socket_path)
+                    )
+                )
+
+                try:
+                    third_writer.write(
+                        (json.dumps(sample_packet) + "\n").encode(
+                            "utf-8"
+                        )
+                    )
+                    await third_writer.drain()
+
+                    response = await asyncio.wait_for(
+                        third_reader.readline(),
+                        timeout=2,
+                    )
+
+                    assert json.loads(response) == {
+                        "status": "accepted"
+                    }
+
+                finally:
+                    third_writer.close()
+                    await third_writer.wait_closed()
+
+            finally:
+                server.close()
+                await server.wait_closed()
+                socket_path.unlink(missing_ok=True)
+
+        asyncio.run(run_test())

@@ -17,6 +17,9 @@ SOCKET_PATH = BASE_DIR / "data" / "netscope.sock"
 # Maximum size of one packet metadata message.
 MAX_MESSAGE_BYTES = 4096
 
+# Maximum number of simultaneous client connections.
+MAX_CONNECTIONS = 20
+
 # Fields expected from traffic_analysis.packet_to_dict().
 PACKET_FIELDS = {
     "timestamp",
@@ -214,6 +217,64 @@ async def handle_connection(reader, writer):
             pass
 
 
+def make_limited_handler(max_connections=MAX_CONNECTIONS):
+    """
+    Wrap the packet receiver with a connection limit.
+
+    The returned callback tracks active connections
+    belonging to one asyncio server instance.
+    """
+
+    if type(max_connections) is not int or max_connections < 1:
+        raise ValueError(
+            "Maximum connections must be a positive integer."
+        )
+
+    active_connections = 0
+
+    async def limited_handler(reader, writer):
+        nonlocal active_connections
+
+        # Reject clients when the receiver is at capacity.
+        if active_connections >= max_connections:
+            try:
+                response = {"status": "busy"}
+
+                writer.write(
+                    (json.dumps(response) + "\n").encode("utf-8")
+                )
+
+                await asyncio.wait_for(
+                    writer.drain(),
+                    timeout=1,
+                )
+
+            except (ConnectionError, OSError, asyncio.TimeoutError):
+                pass
+
+            finally:
+                writer.close()
+
+                try:
+                    await writer.wait_closed()
+                except (ConnectionError, OSError):
+                    pass
+
+            return
+
+        # Reserve one active connection slot.
+        active_connections += 1
+
+        try:
+            # Use our existing bounded packet handler.
+            await handle_connection(reader, writer)
+
+        finally:
+            # Always release the slot.
+            active_connections -= 1
+
+    return limited_handler
+
 
 def remove_owned_socket(socket_path, original_identity):
     """
@@ -334,7 +395,7 @@ async def start_receiver():
 
         # Pass the already-bound socket to asyncio.
         server = await asyncio.start_unix_server(
-            handle_connection,
+            make_limited_handler(),
             sock=listener,
             limit=MAX_MESSAGE_BYTES + 1,
         )
