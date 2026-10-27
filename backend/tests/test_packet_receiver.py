@@ -6,6 +6,7 @@ import stat
 import sys
 import tempfile
 from pathlib import Path
+import os
 
 import pytest
 
@@ -19,6 +20,8 @@ from packet_receiver import (
     handle_connection,
     read_packet_message,
     remove_owned_socket,
+    start_receiver,
+    SOCKET_PATH,
 )
 
 
@@ -38,6 +41,7 @@ def sample_packet():
 
 def test_valid_packet(sample_packet):
     assert validate_packet(sample_packet) == sample_packet
+
 
 
 @pytest.mark.parametrize(
@@ -121,6 +125,7 @@ def test_valid_socket_message(sample_packet):
     asyncio.run(run_test())
 
 
+
 @pytest.mark.parametrize(
     "message",
     [
@@ -130,16 +135,21 @@ def test_valid_socket_message(sample_packet):
         b"\n",
         b"x" * 5000 + b"\n",
     ],
+    ids=[
+        "empty",
+        "incomplete",
+        "invalid-json",
+        "newline-only",
+        "oversized",
+    ],
 )
 def test_invalid_message_framing(message):
     async def run_test():
-        # Simulate an incoming message.
         reader = asyncio.StreamReader(limit=4097)
 
         reader.feed_data(message)
         reader.feed_eof()
 
-        # Invalid messages must be rejected.
         with pytest.raises(ValueError):
             await read_packet_message(reader)
 
@@ -180,7 +190,11 @@ def test_socket_cleanup_preserves_replacement():
         ) as server:
             server.bind(str(socket_path))
 
-            original_inode = socket_path.lstat().st_ino
+            socket_info = socket_path.lstat()
+            original_identity = (
+                socket_info.st_dev,
+                socket_info.st_ino,
+            )
 
             # Simulate the original socket being replaced.
             socket_path.unlink()
@@ -189,7 +203,7 @@ def test_socket_cleanup_preserves_replacement():
             # Cleanup should not delete the replacement file.
             remove_owned_socket(
                 socket_path,
-                original_inode,
+                original_identity,
             )
 
             assert socket_path.read_text() == "replacement"
@@ -211,12 +225,16 @@ def test_socket_cleanup_removes_original():
         ) as server:
             server.bind(str(socket_path))
 
-            original_inode = socket_path.lstat().st_ino
+            socket_info = socket_path.lstat()
+            original_identity = (
+                socket_info.st_dev,
+                socket_info.st_ino,
+            )
 
             # Remove the original socket.
             remove_owned_socket(
                 socket_path,
-                original_inode,
+                original_identity,
             )
 
             assert not socket_path.exists()
@@ -277,3 +295,148 @@ def test_unix_socket_connection(sample_packet):
                 socket_path.unlink(missing_ok=True)
 
         asyncio.run(run_test())
+
+
+def test_socket_permissions():
+    """
+    Verify that a newly created Unix socket can
+    be restricted to owner-only access.
+    """
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "test.sock"
+
+        with socket.socket(
+            socket.AF_UNIX,
+            socket.SOCK_STREAM,
+        ) as server:
+            server.bind(str(socket_path))
+
+            os.chmod(socket_path, 0o600)
+
+            socket_info = socket_path.stat()
+
+            assert stat.S_ISSOCK(socket_info.st_mode)
+            assert stat.S_IMODE(socket_info.st_mode) == 0o600
+            assert socket_info.st_uid == os.getuid()
+
+
+def test_socket_directory_permissions():
+    """
+    Verify that a private temporary directory
+    uses owner-only permissions.
+    """
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        directory = Path(temporary_directory)
+        directory_info = directory.stat()
+
+        assert stat.S_IMODE(directory_info.st_mode) == 0o700
+        assert directory_info.st_uid == os.getuid()
+
+
+def test_socket_permissions():
+    """
+    Verify that a Unix socket can be restricted
+    to owner-only permissions.
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "test.sock"
+
+        # Create a local Unix domain socket.
+        with socket.socket(
+            socket.AF_UNIX,
+            socket.SOCK_STREAM,
+        ) as server:
+            server.bind(str(socket_path))
+
+            # Restrict access to the owning user.
+            os.chmod(socket_path, 0o600)
+
+            socket_info = socket_path.stat()
+
+            assert stat.S_ISSOCK(socket_info.st_mode)
+            assert stat.S_IMODE(socket_info.st_mode) == 0o600
+            assert socket_info.st_uid == os.getuid()
+
+
+def test_socket_directory_permissions():
+    """
+    Verify that temporary private directories
+    use owner-only permissions.
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        directory = Path(temporary_directory)
+        directory_info = directory.stat()
+
+        assert stat.S_IMODE(directory_info.st_mode) == 0o700
+        assert directory_info.st_uid == os.getuid()
+
+
+def test_existing_socket_cannot_be_replaced(monkeypatch):
+    """
+    Verify that starting another receiver does not
+    replace an existing Unix socket.
+    """
+
+    import packet_receiver
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "test.sock"
+
+        # Create an existing socket at the target path.
+        with socket.socket(
+            socket.AF_UNIX,
+            socket.SOCK_STREAM,
+        ) as existing_socket:
+
+            existing_socket.bind(str(socket_path))
+
+            original_info = socket_path.lstat()
+            original_identity = (
+                original_info.st_dev,
+                original_info.st_ino,
+            )
+
+            # Redirect the receiver to our temporary socket.
+            monkeypatch.setattr(
+                packet_receiver,
+                "SOCKET_PATH",
+                socket_path,
+            )
+
+            async def run_test():
+                with pytest.raises(RuntimeError):
+                    await packet_receiver.start_receiver()
+
+            asyncio.run(run_test())
+
+            # The existing socket must remain unchanged.
+            current_info = socket_path.lstat()
+
+            assert stat.S_ISSOCK(current_info.st_mode)
+
+            assert (
+                current_info.st_dev,
+                current_info.st_ino,
+            ) == original_identity

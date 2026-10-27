@@ -4,6 +4,7 @@ import ipaddress
 import json
 import os
 import stat
+import socket
 
 from datetime import datetime
 from pathlib import Path
@@ -213,7 +214,33 @@ async def handle_connection(reader, writer):
             pass
 
 
-def remove_owned_socket(socket_path, original_inode):
+
+def remove_owned_socket(socket_path, original_identity):
+    """
+    Remove a socket only if its device and inode
+    still match the socket created by this process.
+    """
+
+    try:
+        current = socket_path.lstat()
+
+    except FileNotFoundError:
+        return
+
+    current_identity = (
+        current.st_dev,
+        current.st_ino,
+    )
+
+    # Never remove a replacement filesystem entry.
+    if (
+        current_identity != original_identity
+        or not stat.S_ISSOCK(current.st_mode)
+    ):
+        return
+
+    socket_path.unlink()
+
     """
     Remove the socket only if its filesystem identity
     still matches the socket created by this receiver.
@@ -235,15 +262,22 @@ def remove_owned_socket(socket_path, original_inode):
     socket_path.unlink()
 
 
-
 async def start_receiver():
     """
-    Start a local Unix domain socket server.
+    Start a private Unix domain socket server.
+
+    Bind the socket directly to avoid asyncio's automatic
+    removal of an existing Unix socket path.
     """
 
     directory = SOCKET_PATH.parent
 
-    # Ensure NetScope's private data directory exists.
+    # Verify the directory is not a symbolic link.
+    if directory.is_symlink():
+        raise RuntimeError(
+            "Data directory must not be a symbolic link."
+        )
+
     if not directory.is_dir():
         raise RuntimeError(
             "NetScope data directory is missing."
@@ -251,115 +285,93 @@ async def start_receiver():
 
     directory_stat = directory.stat()
 
-    # Ensure the current user owns the directory.
+    # Verify ownership and directory permissions.
     if directory_stat.st_uid != os.getuid():
         raise RuntimeError(
             "Data directory owner is incorrect."
         )
 
-    # Ensure the directory is private.
     if stat.S_IMODE(directory_stat.st_mode) != 0o700:
         raise RuntimeError(
             "Data directory must have 700 permissions."
         )
 
-    # Never overwrite an existing socket or file.
-    if SOCKET_PATH.exists() or SOCKET_PATH.is_symlink():
+    # Refuse an existing file, socket, or symbolic link.
+    if SOCKET_PATH.is_symlink() or os.path.lexists(SOCKET_PATH):
         raise RuntimeError(
             "Socket path already exists. "
             "Check for another receiver."
         )
 
-    # Restrict permissions when creating the socket.
+    # Create the underlying Unix socket ourselves.
+    listener = socket.socket(
+        socket.AF_UNIX,
+        socket.SOCK_STREAM,
+    )
+
+    server = None
+    socket_identity = None
+
     previous_umask = os.umask(0o177)
 
     try:
+        # Bind does not automatically unlink an existing path.
+        listener.bind(str(SOCKET_PATH))
+
+        # Remember the socket's filesystem identity.
+        socket_info = SOCKET_PATH.lstat()
+        socket_identity = (
+            socket_info.st_dev,
+            socket_info.st_ino,
+        )
+
+        # Restrict access to the owning user.
+        os.chmod(SOCKET_PATH, 0o600)
+
+        # Prepare for incoming connections.
+        listener.listen(5)
+        listener.setblocking(False)
+
+        # Pass the already-bound socket to asyncio.
         server = await asyncio.start_unix_server(
             handle_connection,
-            path=str(SOCKET_PATH),
+            sock=listener,
             limit=MAX_MESSAGE_BYTES + 1,
         )
+
+        # asyncio now owns the listener.
+        listener = None
 
     finally:
         os.umask(previous_umask)
 
-    # Record the identity of the socket.
-    socket_info = SOCKET_PATH.lstat()
-    socket_inode = socket_info.st_ino
+        # If startup failed, close our remaining socket.
+        if server is None:
+            listener.close()
+
+            if socket_identity is not None:
+                remove_owned_socket(
+                    SOCKET_PATH,
+                    socket_identity,
+                )
 
     try:
-        # Only the owning user should access the socket.
-        os.chmod(SOCKET_PATH, 0o600)
-
         print("===== NetScope Packet Receiver =====")
         print(f"Socket: {SOCKET_PATH}")
         print("Listening for local packet metadata...")
 
-        # Accept incoming local connections.
         async with server:
             await server.serve_forever()
 
     finally:
-        # Shut down the receiver.
         server.close()
         await server.wait_closed()
 
-        # Remove the original socket if it still exists.
+        # Remove only the socket created by this process.
         remove_owned_socket(
             SOCKET_PATH,
-            socket_inode,
+            socket_identity,
         )
-
-    """
-    Start a local Unix domain socket server.
-    """
-
-    directory = SOCKET_PATH.parent
-
-    # Use the private data directory created previously.
-    if not directory.is_dir():
-        raise RuntimeError("NetScope data directory is missing.")
-
-    directory_stat = directory.stat()
-
-    if directory_stat.st_uid != os.getuid():
-        raise RuntimeError("Data directory owner is incorrect.")
-
-    if stat.S_IMODE(directory_stat.st_mode) != 0o700:
-        raise RuntimeError("Data directory must have 700 permissions.")
-
-    # Do not overwrite an existing socket or filesystem entry.
-    if SOCKET_PATH.exists() or SOCKET_PATH.is_symlink():
-        raise RuntimeError(
-            "Socket path already exists. Check for another receiver."
-        )
-
-    # Ensure the socket is created with private permissions.
-    previous_umask = os.umask(0o177)
-
-    try:
-        server = await asyncio.start_unix_server(
-            handle_connection,
-            path=str(SOCKET_PATH),
-            limit=MAX_MESSAGE_BYTES,
-        )
-    finally:
-        os.umask(previous_umask)
-
-    os.chmod(SOCKET_PATH, 0o600)
-
-    print("===== NetScope Packet Receiver =====")
-    print(f"Socket: {SOCKET_PATH}")
-    print("Listening for local packet metadata...")
-
-    try:
-        async with server:
-            await server.serve_forever()
-    finally:
-        # Close and remove the socket when the receiver stops.
-        server.close()
-        await server.wait_closed()
-        SOCKET_PATH.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

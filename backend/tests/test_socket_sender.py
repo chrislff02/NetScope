@@ -4,7 +4,10 @@ import socket
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+# Move up from tests/ to backend/ to NetScope/.
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+# Location of the Unix socket created by packet_receiver.py.
 SOCKET_PATH = BASE_DIR / "data" / "netscope.sock"
 
 
