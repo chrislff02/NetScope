@@ -118,31 +118,63 @@ def validate_packet(packet):
     return packet
 
 
+async def read_packet_message(reader):
+    """
+    Read one bounded, newline-delimited JSON message.
+
+    Reject oversized, incomplete, or stalled messages.
+    """
+
+    try:
+        # Wait for one complete newline-delimited message.
+        message = await asyncio.wait_for(
+            reader.readuntil(b"\n"),
+            timeout=5,
+        )
+
+    except asyncio.TimeoutError as error:
+        raise ValueError(
+            "Timed out waiting for packet metadata."
+        ) from error
+
+    except asyncio.IncompleteReadError as error:
+        raise ValueError(
+            "Incomplete packet message."
+        ) from error
+
+    except asyncio.LimitOverrunError as error:
+        raise ValueError(
+            "Packet message exceeds reader limit."
+        ) from error
+
+    # Reject empty or oversized messages.
+    if len(message) <= 1 or len(message) > MAX_MESSAGE_BYTES:
+        raise ValueError(
+            "Packet message size is invalid."
+        )
+
+    try:
+        return json.loads(message.decode("utf-8"))
+
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(
+            "Packet message is not valid JSON."
+        ) from error
+
+
 async def handle_connection(reader, writer):
     """
     Receive and validate one newline-delimited JSON record.
     """
 
     try:
-        # Read at most one bounded message.
-        message = await asyncio.wait_for(
-            reader.readline(),
-            timeout=5,
-        )
+        # Read one complete, bounded JSON message.
+        packet = await read_packet_message(reader)
 
-        if (
-            not message
-            or len(message) > MAX_MESSAGE_BYTES
-            or not message.endswith(b"\n")
-        ):
-            raise ValueError("Invalid message length or framing.")
-
-        # Convert JSON into a Python dictionary.
-        packet = json.loads(message.decode("utf-8"))
-
-        # Validate the packet's structure and values.
+        # Validate the extracted packet metadata.
         validate_packet(packet)
 
+        # Display basic information about the accepted packet.
         print(
             f"Accepted {packet['protocol']} packet "
             f"({packet['size']} bytes)"
@@ -150,32 +182,134 @@ async def handle_connection(reader, writer):
 
         response = {"status": "accepted"}
 
-    except (
-        ValueError,
-        UnicodeError,
-        json.JSONDecodeError,
-        asyncio.TimeoutError,
-        asyncio.LimitOverrunError,
-    ) as error:
+    except ValueError as error:
+        # Reject invalid, incomplete, or oversized messages.
         print(f"Rejected packet: {error}")
         response = {"status": "rejected"}
 
     except Exception as error:
-        # Log unexpected errors without leaking details to clients.
+        # Handle unexpected errors without exposing details.
         print(f"Receiver error: {type(error).__name__}")
         response = {"status": "error"}
 
     try:
+        # Send an acknowledgment to the client.
         writer.write(
             (json.dumps(response) + "\n").encode("utf-8")
         )
         await writer.drain()
+
+    except (ConnectionError, OSError):
+        # The client may have disconnected already.
+        pass
+
     finally:
+        # Close the connection after processing the message.
         writer.close()
-        await writer.wait_closed()
+
+        try:
+            await writer.wait_closed()
+        except (ConnectionError, OSError):
+            pass
+
+
+def remove_owned_socket(socket_path, original_inode):
+    """
+    Remove the socket only if its filesystem identity
+    still matches the socket created by this receiver.
+    """
+
+    try:
+        current = socket_path.lstat()
+
+    except FileNotFoundError:
+        return
+
+    # Do not remove a replacement filesystem entry.
+    if (
+        current.st_ino != original_inode
+        or not stat.S_ISSOCK(current.st_mode)
+    ):
+        return
+
+    socket_path.unlink()
+
 
 
 async def start_receiver():
+    """
+    Start a local Unix domain socket server.
+    """
+
+    directory = SOCKET_PATH.parent
+
+    # Ensure NetScope's private data directory exists.
+    if not directory.is_dir():
+        raise RuntimeError(
+            "NetScope data directory is missing."
+        )
+
+    directory_stat = directory.stat()
+
+    # Ensure the current user owns the directory.
+    if directory_stat.st_uid != os.getuid():
+        raise RuntimeError(
+            "Data directory owner is incorrect."
+        )
+
+    # Ensure the directory is private.
+    if stat.S_IMODE(directory_stat.st_mode) != 0o700:
+        raise RuntimeError(
+            "Data directory must have 700 permissions."
+        )
+
+    # Never overwrite an existing socket or file.
+    if SOCKET_PATH.exists() or SOCKET_PATH.is_symlink():
+        raise RuntimeError(
+            "Socket path already exists. "
+            "Check for another receiver."
+        )
+
+    # Restrict permissions when creating the socket.
+    previous_umask = os.umask(0o177)
+
+    try:
+        server = await asyncio.start_unix_server(
+            handle_connection,
+            path=str(SOCKET_PATH),
+            limit=MAX_MESSAGE_BYTES + 1,
+        )
+
+    finally:
+        os.umask(previous_umask)
+
+    # Record the identity of the socket.
+    socket_info = SOCKET_PATH.lstat()
+    socket_inode = socket_info.st_ino
+
+    try:
+        # Only the owning user should access the socket.
+        os.chmod(SOCKET_PATH, 0o600)
+
+        print("===== NetScope Packet Receiver =====")
+        print(f"Socket: {SOCKET_PATH}")
+        print("Listening for local packet metadata...")
+
+        # Accept incoming local connections.
+        async with server:
+            await server.serve_forever()
+
+    finally:
+        # Shut down the receiver.
+        server.close()
+        await server.wait_closed()
+
+        # Remove the original socket if it still exists.
+        remove_owned_socket(
+            SOCKET_PATH,
+            socket_inode,
+        )
+
     """
     Start a local Unix domain socket server.
     """

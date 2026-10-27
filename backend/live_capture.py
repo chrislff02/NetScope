@@ -142,15 +142,11 @@ def start_live_capture(interface, max_packets, timeout, protocol):
         print("Check your interface and capture permissions.")
         return
 
-    # Generate our traffic summary.
-    statistics = calculate_statistics(packet_records)
-
-
     
-    # Calculate statistics from captured packet metadata.
+    # Calculate statistics once after the capture finishes.
     statistics = calculate_statistics(packet_records)
 
-    # Prepare the completed recording for export.
+    # Combine captured packet metadata with statistics.
     capture_data = {
         "source": "live_capture",
         "interface": str(interface),
@@ -159,25 +155,9 @@ def start_live_capture(interface, max_packets, timeout, protocol):
         "statistics": statistics,
     }
 
-    # Save the recording with appropriate file ownership.
+    # Save the recording atomically with private permissions.
     save_capture_data(capture_data)
-
-
-    # Combine captured packets with their statistics.
-    capture_data = {
-        "source": "live_capture",
-        "interface": str(interface),
-        "raw_packets_captured": raw_packet_count,
-        "packets": packet_records,
-        "statistics": statistics,
-    }
-
-    # Save the packet metadata in JSON format.
-    with open(CAPTURE_OUTPUT, "w", encoding="utf-8") as file:
-        json.dump(capture_data, file, indent=2)
-
-    print(f"\nCapture data saved to: {CAPTURE_OUTPUT}")
-
+    
 
     print("\n===== NetScope Live Traffic Summary =====")
     print(f"Raw Packets Captured: {raw_packet_count}")
