@@ -666,3 +666,76 @@ def test_invalid_packet_is_not_broadcast(sample_packet):
             await server.wait_closed()
 
     asyncio.run(run_test())
+
+
+def test_limited_unix_receiver_broadcasts(sample_packet):
+    """
+    Verify that the connection-limited Unix socket handler
+    forwards valid packets to the broadcaster.
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "test.sock"
+
+        async def run_test():
+            broadcaster = PacketBroadcaster()
+            queue = broadcaster.subscribe()
+
+            server = await asyncio.start_unix_server(
+                make_limited_handler(
+                    max_connections=2,
+                    on_packet=broadcaster.publish,
+                ),
+                path=str(socket_path),
+                limit=4097,
+            )
+
+            try:
+                reader, writer = (
+                    await asyncio.open_unix_connection(
+                        str(socket_path)
+                    )
+                )
+
+                try:
+                    # Send valid packet metadata.
+                    message = json.dumps(sample_packet) + "\n"
+
+                    writer.write(message.encode("utf-8"))
+                    await writer.drain()
+
+                    # Verify the receiver accepted the packet.
+                    response = await asyncio.wait_for(
+                        reader.readline(),
+                        timeout=2,
+                    )
+
+                    assert json.loads(response) == {
+                        "status": "accepted"
+                    }
+
+                    # Verify the broadcaster received it.
+                    received = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=2,
+                    )
+
+                    assert received == sample_packet
+
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            finally:
+                broadcaster.unsubscribe(queue)
+
+                server.close()
+                await server.wait_closed()
+
+                socket_path.unlink(missing_ok=True)
+
+        asyncio.run(run_test())

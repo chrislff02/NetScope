@@ -311,7 +311,7 @@ def remove_owned_socket(socket_path, original_identity):
     socket_path.unlink()
 
 
-async def start_receiver():
+async def start_receiver(on_packet=None, ready_event=None):
     """
     Start a private Unix domain socket server.
 
@@ -383,7 +383,10 @@ async def start_receiver():
 
         # Pass the already-bound socket to asyncio.
         server = await asyncio.start_unix_server(
-            make_limited_handler(),
+            make_limited_handler(
+                max_connections=MAX_CONNECTIONS,
+                on_packet=on_packet,
+            ),
             sock=listener,
             limit=MAX_MESSAGE_BYTES + 1,
         )
@@ -403,14 +406,20 @@ async def start_receiver():
                     SOCKET_PATH,
                     socket_identity,
                 )
-
+    
     try:
         print("===== NetScope Packet Receiver =====")
         print(f"Socket: {SOCKET_PATH}")
         print("Listening for local packet metadata...")
 
         async with server:
+            # Inform FastAPI that the receiver is ready.
+            if ready_event is not None:
+                ready_event.set()
+
+            # Keep accepting local connections.
             await server.serve_forever()
+
 
     finally:
         server.close()

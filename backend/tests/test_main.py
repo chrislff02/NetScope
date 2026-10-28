@@ -1,15 +1,24 @@
 
-from pathlib import Path
+import os
+import stat
 import sys
+import tempfile
+
+from pathlib import Path
 
 import pytest
+
 from fastapi.testclient import TestClient
 
-# Allow our tests to import main.py.
+
+# Allow our tests to import modules from backend/.
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
+
+# Import backend modules after updating sys.path.
 import main
+import packet_receiver
 
 
 # Create a test client for our FastAPI application.
@@ -169,3 +178,49 @@ def test_websocket_traffic_stream():
             "event": "complete",
             "packets_sent": 5,
         }
+
+
+def test_fastapi_manages_packet_receiver(monkeypatch):
+    """
+    Verify that FastAPI starts the Unix socket receiver,
+    applies private permissions, and cleans up on shutdown.
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        directory = Path(temporary_directory)
+        socket_path = directory / "test.sock"
+
+        # The receiver requires a private directory.
+        os.chmod(directory, 0o700)
+
+        # Redirect the receiver to the test socket.
+        monkeypatch.setattr(
+            packet_receiver,
+            "SOCKET_PATH",
+            socket_path,
+        )
+
+        # Entering TestClient's context runs FastAPI startup.
+        with TestClient(main.app) as client:
+            response = client.get("/api/health")
+
+            assert response.status_code == 200
+
+            # The receiver should have created its socket.
+            socket_info = socket_path.stat()
+
+            assert stat.S_ISSOCK(socket_info.st_mode)
+            assert stat.S_IMODE(socket_info.st_mode) == 0o600
+            assert socket_info.st_uid == os.getuid()
+
+            # Confirm that FastAPI has its broadcaster.
+            broadcaster = main.app.state.packet_broadcaster
+
+            assert broadcaster.subscriber_count == 0
+
+        # Exiting TestClient's context runs shutdown.
+        assert not socket_path.exists()

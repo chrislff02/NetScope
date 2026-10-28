@@ -1,7 +1,10 @@
+import asyncio
 import json
+
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-
 
 from fastapi import (
     FastAPI,
@@ -10,10 +13,10 @@ from fastapi import (
     WebSocketDisconnect,
 )
 
-import asyncio
-from datetime import datetime, timezone
-
 from scapy.all import rdpcap
+
+from packet_broadcaster import PacketBroadcaster
+from packet_receiver import start_receiver
 
 from traffic_analysis import (
     packet_to_dict,
@@ -21,11 +24,79 @@ from traffic_analysis import (
 )
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Manage NetScope's broadcaster and Unix socket receiver
+    alongside the FastAPI application.
+    """
+
+    # Create one broadcaster for this application instance.
+    broadcaster = PacketBroadcaster()
+    app.state.packet_broadcaster = broadcaster
+
+    # Used to confirm that the receiver has started.
+    ready_event = asyncio.Event()
+
+    # Start the receiver without blocking FastAPI startup.
+    receiver_task = asyncio.create_task(
+        start_receiver(
+            on_packet=broadcaster.publish,
+            ready_event=ready_event,
+        )
+    )
+
+    ready_task = asyncio.create_task(ready_event.wait())
+
+    try:
+        # Wait for either successful startup or an early failure.
+        done, _ = await asyncio.wait(
+            {receiver_task, ready_task},
+            timeout=5,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if receiver_task in done:
+            # Propagate the actual startup error to FastAPI.
+            await receiver_task
+
+            raise RuntimeError(
+                "Packet receiver exited during startup."
+            )
+
+        if ready_task not in done:
+            raise RuntimeError(
+                "Packet receiver startup timed out."
+            )
+
+        print("NetScope packet receiver is ready.")
+
+        # FastAPI can now serve HTTP and WebSocket requests.
+        yield
+
+    finally:
+        ready_task.cancel()
+        await asyncio.gather(
+            ready_task,
+            return_exceptions=True,
+        )
+
+        # Stop the receiver on shutdown or failed startup.
+        receiver_task.cancel()
+        await asyncio.gather(
+            receiver_task,
+            return_exceptions=True,
+        )
+
+        print("NetScope packet receiver stopped.")
+
+
 # Create our FastAPI application.
 app = FastAPI(
     title="NetScope API",
     description="Network Traffic Analysis API",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 
