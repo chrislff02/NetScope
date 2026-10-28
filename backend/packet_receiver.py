@@ -166,19 +166,25 @@ async def read_packet_message(reader):
         ) from error
 
 
-async def handle_connection(reader, writer):
+
+async def handle_connection(reader, writer, on_packet=None):
     """
     Receive and validate one newline-delimited JSON record.
+
+    Optionally forward valid packet metadata to a callback.
     """
 
     try:
-        # Read one complete, bounded JSON message.
+        # Read one bounded JSON message.
         packet = await read_packet_message(reader)
 
-        # Validate the extracted packet metadata.
+        # Reject invalid packet metadata.
         validate_packet(packet)
 
-        # Display basic information about the accepted packet.
+        # Forward only validated packet metadata.
+        if on_packet is not None:
+            on_packet(packet)
+
         print(
             f"Accepted {packet['protocol']} packet "
             f"({packet['size']} bytes)"
@@ -187,28 +193,24 @@ async def handle_connection(reader, writer):
         response = {"status": "accepted"}
 
     except ValueError as error:
-        # Reject invalid, incomplete, or oversized messages.
         print(f"Rejected packet: {error}")
         response = {"status": "rejected"}
 
     except Exception as error:
-        # Handle unexpected errors without exposing details.
         print(f"Receiver error: {type(error).__name__}")
         response = {"status": "error"}
 
     try:
-        # Send an acknowledgment to the client.
+        # Return an acknowledgment.
         writer.write(
             (json.dumps(response) + "\n").encode("utf-8")
         )
         await writer.drain()
 
     except (ConnectionError, OSError):
-        # The client may have disconnected already.
         pass
 
     finally:
-        # Close the connection after processing the message.
         writer.close()
 
         try:
@@ -217,12 +219,14 @@ async def handle_connection(reader, writer):
             pass
 
 
-def make_limited_handler(max_connections=MAX_CONNECTIONS):
+def make_limited_handler(
+    max_connections=MAX_CONNECTIONS,
+    on_packet=None,
+):
     """
     Wrap the packet receiver with a connection limit.
 
-    The returned callback tracks active connections
-    belonging to one asyncio server instance.
+    Optionally forward validated packets to a callback.
     """
 
     if type(max_connections) is not int or max_connections < 1:
@@ -235,7 +239,7 @@ def make_limited_handler(max_connections=MAX_CONNECTIONS):
     async def limited_handler(reader, writer):
         nonlocal active_connections
 
-        # Reject clients when the receiver is at capacity.
+        # Reject connections when the receiver is at capacity.
         if active_connections >= max_connections:
             try:
                 response = {"status": "busy"}
@@ -262,15 +266,19 @@ def make_limited_handler(max_connections=MAX_CONNECTIONS):
 
             return
 
-        # Reserve one active connection slot.
+        # Reserve one connection slot.
         active_connections += 1
 
         try:
-            # Use our existing bounded packet handler.
-            await handle_connection(reader, writer)
+            # Process the packet and optionally broadcast it.
+            await handle_connection(
+                reader,
+                writer,
+                on_packet=on_packet,
+            )
 
         finally:
-            # Always release the slot.
+            # Always release the connection slot.
             active_connections -= 1
 
     return limited_handler
@@ -296,26 +304,6 @@ def remove_owned_socket(socket_path, original_identity):
     # Never remove a replacement filesystem entry.
     if (
         current_identity != original_identity
-        or not stat.S_ISSOCK(current.st_mode)
-    ):
-        return
-
-    socket_path.unlink()
-
-    """
-    Remove the socket only if its filesystem identity
-    still matches the socket created by this receiver.
-    """
-
-    try:
-        current = socket_path.lstat()
-
-    except FileNotFoundError:
-        return
-
-    # Do not remove a replacement filesystem entry.
-    if (
-        current.st_ino != original_inode
         or not stat.S_ISSOCK(current.st_mode)
     ):
         return

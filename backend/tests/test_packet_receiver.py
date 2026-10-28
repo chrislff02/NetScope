@@ -14,6 +14,7 @@ import pytest
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
+from packet_broadcaster import PacketBroadcaster
 
 from packet_receiver import (
     validate_packet,
@@ -300,50 +301,6 @@ def test_unix_socket_connection(sample_packet):
 
 def test_socket_permissions():
     """
-    Verify that a newly created Unix socket can
-    be restricted to owner-only access.
-    """
-    with tempfile.TemporaryDirectory(
-        prefix="ns-",
-        dir="/tmp",
-    ) as temporary_directory:
-
-        socket_path = Path(temporary_directory) / "test.sock"
-
-        with socket.socket(
-            socket.AF_UNIX,
-            socket.SOCK_STREAM,
-        ) as server:
-            server.bind(str(socket_path))
-
-            os.chmod(socket_path, 0o600)
-
-            socket_info = socket_path.stat()
-
-            assert stat.S_ISSOCK(socket_info.st_mode)
-            assert stat.S_IMODE(socket_info.st_mode) == 0o600
-            assert socket_info.st_uid == os.getuid()
-
-
-def test_socket_directory_permissions():
-    """
-    Verify that a private temporary directory
-    uses owner-only permissions.
-    """
-    with tempfile.TemporaryDirectory(
-        prefix="ns-",
-        dir="/tmp",
-    ) as temporary_directory:
-
-        directory = Path(temporary_directory)
-        directory_info = directory.stat()
-
-        assert stat.S_IMODE(directory_info.st_mode) == 0o700
-        assert directory_info.st_uid == os.getuid()
-
-
-def test_socket_permissions():
-    """
     Verify that a Unix socket can be restricted
     to owner-only permissions.
     """
@@ -578,3 +535,134 @@ def test_unix_socket_connection_limit(sample_packet):
                 socket_path.unlink(missing_ok=True)
 
         asyncio.run(run_test())
+
+
+def test_valid_packet_is_broadcast(sample_packet):
+    """
+    Verify that a validated packet reaches
+    an active broadcaster subscriber.
+    """
+
+    async def run_test():
+        broadcaster = PacketBroadcaster()
+        queue = broadcaster.subscribe()
+
+        # Start a local test server.
+        server = await asyncio.start_server(
+            lambda reader, writer: handle_connection(
+                reader,
+                writer,
+                on_packet=broadcaster.publish,
+            ),
+            host="127.0.0.1",
+            port=0,
+        )
+
+        try:
+            port = server.sockets[0].getsockname()[1]
+
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                port,
+            )
+
+            try:
+                writer.write(
+                    (json.dumps(sample_packet) + "\n").encode(
+                        "utf-8"
+                    )
+                )
+                await writer.drain()
+
+                response = await asyncio.wait_for(
+                    reader.readline(),
+                    timeout=2,
+                )
+
+                assert json.loads(response) == {
+                    "status": "accepted"
+                }
+
+                # Confirm the broadcaster received the packet.
+                received = await asyncio.wait_for(
+                    queue.get(),
+                    timeout=2,
+                )
+
+                assert received == sample_packet
+
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        finally:
+            broadcaster.unsubscribe(queue)
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(run_test())
+
+
+def test_invalid_packet_is_not_broadcast(sample_packet):
+    """
+    Invalid metadata must never enter
+    the broadcaster's subscriber queues.
+    """
+
+    async def run_test():
+        broadcaster = PacketBroadcaster()
+        queue = broadcaster.subscribe()
+
+        server = await asyncio.start_server(
+            lambda reader, writer: handle_connection(
+                reader,
+                writer,
+                on_packet=broadcaster.publish,
+            ),
+            host="127.0.0.1",
+            port=0,
+        )
+
+        try:
+            port = server.sockets[0].getsockname()[1]
+
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                port,
+            )
+
+            try:
+                invalid_packet = {
+                    **sample_packet,
+                    "protocol": "INVALID",
+                }
+
+                writer.write(
+                    (json.dumps(invalid_packet) + "\n").encode(
+                        "utf-8"
+                    )
+                )
+                await writer.drain()
+
+                response = await asyncio.wait_for(
+                    reader.readline(),
+                    timeout=2,
+                )
+
+                assert json.loads(response) == {
+                    "status": "rejected"
+                }
+
+                # Invalid packets must not be published.
+                assert queue.empty()
+
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        finally:
+            broadcaster.unsubscribe(queue)
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(run_test())
