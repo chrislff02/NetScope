@@ -300,3 +300,78 @@ async def stream_traffic(websocket: WebSocket):
 
     finally:
         print("WebSocket streaming session ended.")
+
+
+@app.websocket("/ws/traffic/live")
+async def stream_live_traffic(websocket: WebSocket):
+    """
+    Stream validated packet metadata from the shared
+    broadcaster to a connected WebSocket client.
+    """
+
+    await websocket.accept()
+
+    broadcaster = websocket.app.state.packet_broadcaster
+    queue = broadcaster.subscribe()
+
+    print("Live traffic WebSocket client connected.")
+
+    try:
+        await websocket.send_json({
+            "event": "connected",
+            "message": "Listening for live packet metadata.",
+        })
+
+        while True:
+            # Wait for either a packet or a disconnect.
+            packet_task = asyncio.create_task(queue.get())
+            disconnect_task = asyncio.create_task(
+                websocket.receive()
+            )
+
+            try:
+                done, pending = await asyncio.wait(
+                    {packet_task, disconnect_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                # Check whether the browser disconnected.
+                if disconnect_task in done:
+                    message = disconnect_task.result()
+
+                    if message["type"] == "websocket.disconnect":
+                        break
+
+                # Forward new packets to the browser.
+                if packet_task in done:
+                    packet = packet_task.result()
+
+                    await websocket.send_json({
+                        "event": "packet",
+                        "data": packet,
+                    })
+
+            finally:
+                # Cancel only tasks that are still pending.
+                for task in (packet_task, disconnect_task):
+                    if not task.done():
+                        task.cancel()
+
+                # Wait for pending tasks to finish cancellation.
+                await asyncio.gather(
+                    packet_task,
+                    disconnect_task,
+                    return_exceptions=True,
+                )
+
+    except WebSocketDisconnect:
+        print("Live traffic WebSocket client disconnected.")
+
+    except asyncio.CancelledError:
+        # Allow server shutdown cancellation to propagate.
+        raise
+
+    finally:
+        broadcaster.unsubscribe(queue)
+
+        print("Live traffic WebSocket session ended.")

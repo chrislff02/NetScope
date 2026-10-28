@@ -1,4 +1,5 @@
-
+import json
+import socket
 import os
 import stat
 import sys
@@ -223,4 +224,95 @@ def test_fastapi_manages_packet_receiver(monkeypatch):
             assert broadcaster.subscriber_count == 0
 
         # Exiting TestClient's context runs shutdown.
+        assert not socket_path.exists()
+
+
+def test_live_websocket_receives_unix_socket_packet(monkeypatch):
+    """
+    Verify the complete real-time backend pipeline:
+
+    Unix socket -> validation -> broadcaster -> WebSocket.
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        directory = Path(temporary_directory)
+        socket_path = directory / "test.sock"
+
+        os.chmod(directory, 0o700)
+
+        # Use an isolated socket rather than NetScope's real one.
+        monkeypatch.setattr(
+            packet_receiver,
+            "SOCKET_PATH",
+            socket_path,
+        )
+
+        packet = {
+            "timestamp": "2026-10-28T14:00:00.000",
+            "source_ip": "192.0.2.10",
+            "destination_ip": "198.51.100.10",
+            "protocol": "TCP",
+            "source_port": 50000,
+            "destination_port": 443,
+            "tcp_flags": "S",
+            "size": 120,
+        }
+
+        # Starting TestClient also starts the Unix receiver.
+        with TestClient(main.app) as client:
+
+            # Connect to the new WebSocket endpoint.
+            with client.websocket_connect(
+                "/ws/traffic/live"
+            ) as websocket:
+
+                # Confirm that the subscription is active.
+                connected = websocket.receive_json()
+
+                assert connected["event"] == "connected"
+
+                # Send a packet through the actual Unix socket.
+                with socket.socket(
+                    socket.AF_UNIX,
+                    socket.SOCK_STREAM,
+                ) as sender:
+
+                    sender.settimeout(3)
+                    sender.connect(str(socket_path))
+
+                    message = json.dumps(packet) + "\n"
+
+                    sender.sendall(
+                        message.encode("utf-8")
+                    )
+
+                    # Verify the receiver accepted the packet.
+                    response = b""
+
+                    while not response.endswith(b"\n"):
+                        chunk = sender.recv(4096)
+
+                        if not chunk:
+                            break
+
+                        response += chunk
+
+                    assert json.loads(response) == {
+                        "status": "accepted"
+                    }
+
+                # Verify the WebSocket received that same packet.
+                event = websocket.receive_json()
+
+                assert event["event"] == "packet"
+                assert event["data"] == packet
+
+                # Request a normal WebSocket disconnect.
+                websocket.close(code=1000)
+
+        # FastAPI shutdown should remove the Unix socket.
         assert not socket_path.exists()
