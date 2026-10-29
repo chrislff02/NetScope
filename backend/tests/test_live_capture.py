@@ -130,3 +130,92 @@ def test_failed_save_preserves_previous_capture(
 
     # Failed temporary files should be removed.
     assert list(capture_path.parent.glob(".capture-*.tmp")) == []
+
+def test_live_capture_streams_packet_metadata(monkeypatch):
+    """
+    Verify that live capture forwards packet metadata
+    and preserves the completed capture data.
+    """
+
+    sample_record = {
+        "timestamp": "2026-10-29T13:00:00.000",
+        "source_ip": "192.0.2.10",
+        "destination_ip": "198.51.100.10",
+        "protocol": "TCP",
+        "source_port": 50000,
+        "destination_port": 443,
+        "tcp_flags": "S",
+        "size": 120,
+    }
+
+    forwarded = []
+    saved = []
+
+    class FakeForwarder:
+        def start(self):
+            pass
+
+        def enqueue(self, packet):
+            forwarded.append(packet)
+            return True
+
+        def stop(self, timeout=5):
+            return True
+
+        def get_statistics(self):
+            return {
+                "queued": len(forwarded),
+                "sent": len(forwarded),
+                "failed": 0,
+                "dropped": 0,
+                "pending": 0,
+            }
+
+    # Simulate capturing one packet.
+    def fake_sniff(**kwargs):
+        kwargs["prn"](object())
+
+    # Replace real components with test doubles.
+    monkeypatch.setattr(
+        live_capture,
+        "PacketForwarder",
+        FakeForwarder,
+    )
+
+    monkeypatch.setattr(
+        live_capture,
+        "packet_to_dict",
+        lambda packet: sample_record.copy(),
+    )
+
+    monkeypatch.setattr(
+        live_capture,
+        "sniff",
+        fake_sniff,
+    )
+
+    # Prevent overwriting your real capture file.
+    monkeypatch.setattr(
+        live_capture,
+        "save_capture_data",
+        lambda data: saved.append(data),
+    )
+
+    # Run the capture with streaming enabled.
+    live_capture.start_live_capture(
+        interface="en0",
+        max_packets=1,
+        timeout=1,
+        protocol="tcp",
+        stream=True,
+    )
+
+    # Verify forwarding.
+    assert forwarded == [sample_record]
+
+    # Verify the completed capture was preserved.
+    assert len(saved) == 1
+    assert saved[0]["packets"] == [sample_record]
+
+    assert saved[0]["statistics"]["total_packets"] == 1
+    assert saved[0]["statistics"]["total_bytes"] == 120
