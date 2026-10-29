@@ -680,3 +680,51 @@ tbody tr:hover {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Demo / Live streaming mode selector */
+.stream-mode-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+
+.stream-mode-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+
+  padding: 10px 16px;
+
+  border: 1px solid #334155;
+  border-radius: 8px;
+
+  background: transparent;
+  color: #94a3b8;
+
+  font-size: 14px;
+  font-weight: 500;
+
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+
+.stream-mode-button:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.08);
+  color: #f8fafc;
+}
+
+.stream-mode-button.active {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: #3b82f6;
+  color: #60a5fa;
+}
+
+.stream-mode-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

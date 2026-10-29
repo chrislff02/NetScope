@@ -7,6 +7,9 @@ import PacketExplorer from "./PacketExplorer";
 import TrafficChart from "./TrafficChart";
 import ProtocolChart from "./ProtocolChart";
 
+// Available streaming modes.
+type StreamMode = "demo" | "live";
+
 type StreamStatus =
   | "Disconnected"
   | "Connecting"
@@ -14,56 +17,94 @@ type StreamStatus =
   | "Completed"
   | "Error";
 
+// Both endpoints send packet events.
 interface PacketEvent {
   event: "packet";
-  sequence: number;
+  sequence?: number;
   data: Packet;
 }
 
+// The demo endpoint sends this after five packets.
 interface CompleteEvent {
   event: "complete";
   packets_sent: number;
 }
 
-type StreamMessage = PacketEvent | CompleteEvent;
+// The live endpoint sends this after subscribing.
+interface ConnectedEvent {
+  event: "connected";
+  message: string;
+}
+
+type StreamMessage = PacketEvent | CompleteEvent | ConnectedEvent;
 
 function LiveTrafficStream() {
-  // Track the WebSocket connection.
+  // Keep a reference to the current WebSocket.
   const socketRef = useRef<WebSocket | null>(null);
 
-  // Track the current stream status.
+  // Choose between simulated and live traffic.
+  const [mode, setMode] = useState<StreamMode>("demo");
+
+  // Track the connection status.
   const [status, setStatus] = useState<StreamStatus>("Disconnected");
 
-  // Store received packets.
+  // Store received packet metadata.
   const [packets, setPackets] = useState<Packet[]>([]);
 
-  // Store the completion count.
+  // Number of packets reported by the demo endpoint.
   const [packetsSent, setPacketsSent] = useState(0);
 
-  // Open a new WebSocket connection.
+  // Track whether we intentionally stopped the stream.
+  const manuallyStoppedRef = useRef(false);
+
+  // Open the selected WebSocket connection.
   function startStream() {
-    // Prevent multiple active connections.
+    // Prevent duplicate connections.
     if (socketRef.current !== null) {
       return;
     }
 
+    // Reset previous session data.
+    manuallyStoppedRef.current = false;
     setPackets([]);
     setPacketsSent(0);
     setStatus("Connecting");
 
-    // Use the same host as the current browser page.
-    // Port 8000 is our local FastAPI backend.
-    const socket = new WebSocket(
-      `ws://${window.location.hostname}:8000/ws/traffic`,
-    );
+    // Use wss when the page is served over HTTPS.
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+
+    // Select the appropriate FastAPI endpoint.
+    const endpoint = mode === "demo" ? "/ws/traffic" : "/ws/traffic/live";
+
+    const url = `${protocol}://${window.location.hostname}:8000${endpoint}`;
+
+    let socket: WebSocket;
+
+    try {
+      socket = new WebSocket(url);
+    } catch {
+      setStatus("Error");
+      return;
+    }
 
     socketRef.current = socket;
 
     socket.onopen = () => {
-      setStatus("Connected");
+      if (socketRef.current !== socket) {
+        return;
+      }
+
+      // The live endpoint will send its own connected event.
+      if (mode === "demo") {
+        setStatus("Connected");
+      }
     };
 
     socket.onmessage = (event: MessageEvent<string>) => {
+      if (socketRef.current !== socket) {
+        return;
+      }
+
       let message: StreamMessage;
 
       try {
@@ -74,11 +115,19 @@ function LiveTrafficStream() {
         return;
       }
 
-      if (message.event === "packet") {
-        // Add each received packet to React state.
-        setPackets((previous) => [...previous, message.data]);
+      // Live mode confirms the subscription is ready.
+      if (message.event === "connected") {
+        setStatus("Connected");
+        return;
       }
 
+      // Both modes receive packet events.
+      if (message.event === "packet") {
+        setPackets((previous) => [...previous, message.data]);
+        return;
+      }
+
+      // Only demo mode sends a completion event.
       if (message.event === "complete") {
         setPacketsSent(message.packets_sent);
         setStatus("Completed");
@@ -86,83 +135,100 @@ function LiveTrafficStream() {
     };
 
     socket.onerror = () => {
-      setStatus("Error");
+      if (socketRef.current === socket) {
+        setStatus("Error");
+      }
     };
 
     socket.onclose = () => {
-      if (socketRef.current === socket) {
-        socketRef.current = null;
+      // Ignore events from an outdated connection.
+      if (socketRef.current !== socket) {
+        return;
       }
 
-      // Avoid replacing Completed or Error status.
-      setStatus((previous) =>
-        previous === "Completed" || previous === "Error"
-          ? previous
-          : "Disconnected",
-      );
+      socketRef.current = null;
+
+      if (manuallyStoppedRef.current) {
+        setStatus("Disconnected");
+        return;
+      }
+
+      // Preserve completed demo sessions and errors.
+      setStatus((previous) => {
+        if (previous === "Completed" || previous === "Error") {
+          return previous;
+        }
+
+        return "Disconnected";
+      });
     };
   }
 
-  // Manually close the connection.
+  // Stop the active stream manually.
   function stopStream() {
+    manuallyStoppedRef.current = true;
+
     const socket = socketRef.current;
 
-    if (socket) {
-      socket.close();
+    if (socket !== null) {
+      // Clear the reference before closing.
       socketRef.current = null;
+      socket.close();
     }
 
     setStatus("Disconnected");
   }
 
-  // Clean up when navigating away from this page.
+  // Disconnect when leaving the Live Stream page.
   useEffect(() => {
     return () => {
       const socket = socketRef.current;
 
-      if (socket) {
+      if (socket !== null) {
+        socketRef.current = null;
+
         socket.onopen = null;
         socket.onmessage = null;
         socket.onerror = null;
         socket.onclose = null;
+
         socket.close();
-        socketRef.current = null;
       }
     };
   }, []);
 
+  // Prevent mode changes while a stream is active.
   const streaming = status === "Connecting" || status === "Connected";
 
-  const totalBytes = packets.reduce((total, packet) => total + packet.size, 0);
+  // Calculate total received bytes.
+  const totalBytes = useMemo(() => {
+    return packets.reduce((total, packet) => total + packet.size, 0);
+  }, [packets]);
 
-  // Count received packets by protocol.
+  // Count packets by protocol.
   const protocolCounts = useMemo(() => {
     const counts: Record<string, number> = {};
 
     for (const packet of packets) {
       const protocol = packet.protocol;
 
-      // Initialize the protocol count if needed.
       if (!(protocol in counts)) {
         counts[protocol] = 0;
       }
 
-      // Count this packet.
       counts[protocol] += 1;
     }
 
     return counts;
   }, [packets]);
 
-  // Group incoming packets into one-second intervals.
+  // Group received packets into one-second intervals.
   const trafficOverTime = useMemo(() => {
     const timeline: Record<string, { packets: number; bytes: number }> = {};
 
     for (const packet of packets) {
-      // Remove milliseconds to group by second.
       const second = packet.timestamp.slice(0, 19);
 
-      // Create the time interval when first encountered.
       if (!timeline[second]) {
         timeline[second] = {
           packets: 0,
@@ -170,12 +236,10 @@ function LiveTrafficStream() {
         };
       }
 
-      // Update the number of packets and bytes.
       timeline[second].packets += 1;
       timeline[second].bytes += packet.size;
     }
 
-    // Keep timeline entries in chronological order.
     return Object.fromEntries(
       Object.entries(timeline).sort(([first], [second]) =>
         first.localeCompare(second),
@@ -183,25 +247,36 @@ function LiveTrafficStream() {
     );
   }, [packets]);
 
+  // Display mode-specific messages.
+  const modeDescription =
+    mode === "demo"
+      ? "Receive simulated packet events through FastAPI WebSockets."
+      : "Monitor packet metadata received through NetScope's Unix socket.";
+
+  const modeLabel =
+    mode === "demo" ? "Synthetic WebSocket data" : "Live Unix socket metadata";
+
   return (
     <div className="live-stream-page">
       <div className="capture-toolbar">
         <div>
           <h2>Live Traffic Stream</h2>
-          <p>Receive simulated packet events through FastAPI WebSockets.</p>
+          <p>{modeDescription}</p>
         </div>
 
         <div className="stream-controls">
           <button
+            type="button"
             className="capture-refresh-button"
             disabled={streaming}
             onClick={startStream}
           >
             <Play size={16} />
-            Start Demo Stream
+            {mode === "demo" ? "Start Demo Stream" : "Start Live Stream"}
           </button>
 
           <button
+            type="button"
             className="stream-stop-button"
             disabled={!streaming}
             onClick={stopStream}
@@ -212,19 +287,59 @@ function LiveTrafficStream() {
         </div>
       </div>
 
-      {/* Connection status */}
+      {/* Select Demo Mode or Live Mode. */}
+      <div className="stream-mode-selector">
+        <button
+          type="button"
+          className={
+            mode === "demo" ? "stream-mode-button active" : "stream-mode-button"
+          }
+          aria-pressed={mode === "demo"}
+          disabled={streaming}
+          onClick={() => {
+            setMode("demo");
+            setStatus("Disconnected");
+            setPackets([]);
+            setPacketsSent(0);
+          }}
+        >
+          <Play size={16} />
+          Demo Mode
+        </button>
+
+        <button
+          type="button"
+          className={
+            mode === "live" ? "stream-mode-button active" : "stream-mode-button"
+          }
+          aria-pressed={mode === "live"}
+          disabled={streaming}
+          onClick={() => {
+            setMode("live");
+            setStatus("Disconnected");
+            setPackets([]);
+            setPacketsSent(0);
+          }}
+        >
+          <Radio size={16} />
+          Live Mode
+        </button>
+      </div>
+
+      {/* Connection information. */}
       <div className="capture-info">
         <Radio size={16} />
         <span>Connection: {status}</span>
-        <span>Mode: Synthetic WebSocket data</span>
+        <span>Mode: {modeLabel}</span>
       </div>
 
-      {/* Stream statistics */}
+      {/* Stream statistics. */}
       <section className="stats-grid">
         <div className="stat-card">
           <div className="stat-header">
             <span>Packets Received</span>
           </div>
+
           <h2>{packets.length}</h2>
           <p>Events received from FastAPI</p>
         </div>
@@ -233,22 +348,30 @@ function LiveTrafficStream() {
           <div className="stat-header">
             <span>Total Bytes</span>
           </div>
+
           <h2>{totalBytes.toLocaleString()}</h2>
           <p>Bytes in received packet records</p>
         </div>
 
         <div className="stat-card">
           <div className="stat-header">
-            <span>Packets Sent</span>
+            <span>{mode === "demo" ? "Packets Sent" : "Stream Status"}</span>
           </div>
-          <h2>{packetsSent}</h2>
-          <p>Reported after demo completion</p>
+
+          <h2>
+            {mode === "demo" ? packetsSent : streaming ? "Active" : status}
+          </h2>
+
+          <p>
+            {mode === "demo"
+              ? "Reported after demo completion"
+              : "Live receiver connection"}
+          </p>
         </div>
       </section>
 
-      {/* Charts that update when WebSocket packets arrive */}
+      {/* Charts update as packets arrive. */}
       <section className="charts-grid">
-        {/* Traffic volume over time */}
         <div className="panel">
           <div className="panel-header">
             <div>
@@ -262,12 +385,15 @@ function LiveTrafficStream() {
           ) : (
             <div className="chart-placeholder">
               <p>No streaming traffic yet.</p>
-              <span>Start the demo stream to see network activity.</span>
+              <span>
+                {mode === "demo"
+                  ? "Start the demo stream to see network activity."
+                  : "Start Live Mode and send packet metadata to see traffic."}
+              </span>
             </div>
           )}
         </div>
 
-        {/* Packet distribution by network protocol */}
         <div className="panel">
           <div className="panel-header">
             <div>
@@ -287,6 +413,7 @@ function LiveTrafficStream() {
         </div>
       </section>
 
+      {/* WebSocket connection errors. */}
       {status === "Error" && (
         <p role="alert" className="capture-error">
           WebSocket connection failed. Check that FastAPI is running on port
@@ -294,10 +421,14 @@ function LiveTrafficStream() {
         </p>
       )}
 
-      {/* Reuse our existing Packet Explorer */}
+      {/* Reuse the existing Packet Explorer. */}
       <div className="capture-packets-heading">
         <h3>Incoming Packets</h3>
-        <p>Packet records received during this demo session.</p>
+        <p>
+          {mode === "demo"
+            ? "Packet records received during this demo session."
+            : "Packet metadata received during this live session."}
+        </p>
       </div>
 
       <PacketExplorer packets={packets} />
