@@ -7,6 +7,9 @@ import PacketExplorer from "./PacketExplorer";
 import TrafficChart from "./TrafficChart";
 import ProtocolChart from "./ProtocolChart";
 
+// Maximum number of packet records retained in memory.
+const MAX_STREAM_PACKETS = 500;
+
 // Available streaming modes.
 type StreamMode = "demo" | "live";
 
@@ -51,6 +54,10 @@ function LiveTrafficStream() {
   // Store received packet metadata.
   const [packets, setPackets] = useState<Packet[]>([]);
 
+  // Cumulative statistics for the current streaming session.
+  const [totalPacketsReceived, setTotalPacketsReceived] = useState(0);
+  const [totalSessionBytes, setTotalSessionBytes] = useState(0);
+
   // Number of packets reported by the demo endpoint.
   const [packetsSent, setPacketsSent] = useState(0);
 
@@ -68,7 +75,12 @@ function LiveTrafficStream() {
     manuallyStoppedRef.current = false;
     setPackets([]);
     setPacketsSent(0);
+    setTotalPacketsReceived(0);
+    setTotalSessionBytes(0);
     setStatus("Connecting");
+
+    setTotalPacketsReceived(0);
+    setTotalSessionBytes(0);
 
     // Use wss when the page is served over HTTPS.
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -123,7 +135,23 @@ function LiveTrafficStream() {
 
       // Both modes receive packet events.
       if (message.event === "packet") {
-        setPackets((previous) => [...previous, message.data]);
+        const packet = message.data;
+
+        // Update cumulative session statistics.
+        setTotalPacketsReceived((previous) => previous + 1);
+        setTotalSessionBytes((previous) => previous + packet.size);
+
+        // Retain only the most recent 500 packet records.
+        setPackets((previous) => {
+          const updatedPackets = [...previous, packet];
+
+          if (updatedPackets.length > MAX_STREAM_PACKETS) {
+            return updatedPackets.slice(-MAX_STREAM_PACKETS);
+          }
+
+          return updatedPackets;
+        });
+
         return;
       }
 
@@ -199,11 +227,6 @@ function LiveTrafficStream() {
 
   // Prevent mode changes while a stream is active.
   const streaming = status === "Connecting" || status === "Connected";
-
-  // Calculate total received bytes.
-  const totalBytes = useMemo(() => {
-    return packets.reduce((total, packet) => total + packet.size, 0);
-  }, [packets]);
 
   // Count packets by protocol.
   const protocolCounts = useMemo(() => {
@@ -340,7 +363,7 @@ function LiveTrafficStream() {
             <span>Packets Received</span>
           </div>
 
-          <h2>{packets.length}</h2>
+          <h2>{totalPacketsReceived.toLocaleString()}</h2>
           <p>Events received from FastAPI</p>
         </div>
 
@@ -349,7 +372,7 @@ function LiveTrafficStream() {
             <span>Total Bytes</span>
           </div>
 
-          <h2>{totalBytes.toLocaleString()}</h2>
+          <h2>{totalSessionBytes.toLocaleString()}</h2>
           <p>Bytes in received packet records</p>
         </div>
 
@@ -431,7 +454,10 @@ function LiveTrafficStream() {
         </p>
       </div>
 
-      <PacketExplorer packets={packets} />
+      <PacketExplorer
+        packets={packets}
+        sourceLabel={mode === "demo" ? "Demo stream" : "Live stream"}
+      />
     </div>
   );
 }

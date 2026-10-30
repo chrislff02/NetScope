@@ -5,11 +5,15 @@ import type { Packet } from "../services/api";
 
 interface PacketExplorerProps {
   packets: Packet[];
+  sourceLabel?: string;
 }
 
 const PAGE_SIZE = 10;
 
-function PacketExplorer({ packets }: PacketExplorerProps) {
+function PacketExplorer({
+  packets,
+  sourceLabel = "Saved capture",
+}: PacketExplorerProps) {
   // Search text entered by the user.
   const [search, setSearch] = useState("");
 
@@ -105,7 +109,7 @@ function PacketExplorer({ packets }: PacketExplorerProps) {
             Showing {filteredPackets.length} of {packets.length} packets
           </span>
 
-          <span>Saved capture</span>
+          <span>{sourceLabel}</span>
         </div>
 
         {/* Packet table */}
