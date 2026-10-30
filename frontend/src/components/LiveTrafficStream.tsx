@@ -51,6 +51,14 @@ function LiveTrafficStream() {
   // Track the connection status.
   const [status, setStatus] = useState<StreamStatus>("Disconnected");
 
+  // Display useful information about connection failures.
+  const [connectionMessage, setConnectionMessage] = useState<string | null>(
+    null,
+  );
+
+  // Track whether a WebSocket connection succeeded.
+  const [hasConnectedBefore, setHasConnectedBefore] = useState(false);
+
   // Store received packet metadata.
   const [packets, setPackets] = useState<Packet[]>([]);
 
@@ -64,28 +72,29 @@ function LiveTrafficStream() {
   // Track whether we intentionally stopped the stream.
   const manuallyStoppedRef = useRef(false);
 
-  // Open the selected WebSocket connection.
-  function startStream() {
-    // Prevent duplicate connections.
+  // Start a new stream or reconnect to an existing session.
+  function startStream(preserveSession = false) {
+    // Prevent duplicate WebSocket connections.
     if (socketRef.current !== null) {
       return;
     }
 
-    // Reset previous session data.
     manuallyStoppedRef.current = false;
-    setPackets([]);
-    setPacketsSent(0);
-    setTotalPacketsReceived(0);
-    setTotalSessionBytes(0);
+
+    // New sessions reset statistics.
+    // Reconnecting preserves existing session data.
+    if (!preserveSession) {
+      setPackets([]);
+      setPacketsSent(0);
+      setTotalPacketsReceived(0);
+      setTotalSessionBytes(0);
+    }
+
+    setConnectionMessage(null);
     setStatus("Connecting");
 
-    setTotalPacketsReceived(0);
-    setTotalSessionBytes(0);
-
-    // Use wss when the page is served over HTTPS.
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
 
-    // Select the appropriate FastAPI endpoint.
     const endpoint = mode === "demo" ? "/ws/traffic" : "/ws/traffic/live";
 
     const url = `${protocol}://${window.location.hostname}:8000${endpoint}`;
@@ -96,6 +105,9 @@ function LiveTrafficStream() {
       socket = new WebSocket(url);
     } catch {
       setStatus("Error");
+      setConnectionMessage(
+        "Unable to create a WebSocket connection. Check the backend address.",
+      );
       return;
     }
 
@@ -106,8 +118,10 @@ function LiveTrafficStream() {
         return;
       }
 
-      // The live endpoint will send its own connected event.
+      // Demo Mode connects immediately when the socket opens.
+      // Live Mode waits for the backend's connected event.
       if (mode === "demo") {
+        setHasConnectedBefore(true);
         setStatus("Connected");
       }
     };
@@ -123,25 +137,26 @@ function LiveTrafficStream() {
         message = JSON.parse(event.data) as StreamMessage;
       } catch {
         setStatus("Error");
+        setConnectionMessage("The server sent an invalid WebSocket message.");
         socket.close();
         return;
       }
 
-      // Live mode confirms the subscription is ready.
       if (message.event === "connected") {
+        setHasConnectedBefore(true);
         setStatus("Connected");
+        setConnectionMessage(null);
         return;
       }
 
-      // Both modes receive packet events.
       if (message.event === "packet") {
         const packet = message.data;
 
-        // Update cumulative session statistics.
+        // Maintain cumulative statistics for this session.
         setTotalPacketsReceived((previous) => previous + 1);
         setTotalSessionBytes((previous) => previous + packet.size);
 
-        // Retain only the most recent 500 packet records.
+        // Keep only the most recent 500 packet records.
         setPackets((previous) => {
           const updatedPackets = [...previous, packet];
 
@@ -155,21 +170,26 @@ function LiveTrafficStream() {
         return;
       }
 
-      // Only demo mode sends a completion event.
       if (message.event === "complete") {
         setPacketsSent(message.packets_sent);
         setStatus("Completed");
+        setConnectionMessage(null);
       }
     };
 
     socket.onerror = () => {
-      if (socketRef.current === socket) {
-        setStatus("Error");
+      if (socketRef.current !== socket) {
+        return;
       }
+
+      setStatus("Error");
+      setConnectionMessage(
+        "WebSocket connection failed. Check that FastAPI is running on port 8000.",
+      );
     };
 
     socket.onclose = () => {
-      // Ignore events from an outdated connection.
+      // Ignore closure events from outdated connections.
       if (socketRef.current !== socket) {
         return;
       }
@@ -178,10 +198,11 @@ function LiveTrafficStream() {
 
       if (manuallyStoppedRef.current) {
         setStatus("Disconnected");
+        setConnectionMessage(null);
         return;
       }
 
-      // Preserve completed demo sessions and errors.
+      // Preserve completed demo sessions and error states.
       setStatus((previous) => {
         if (previous === "Completed" || previous === "Error") {
           return previous;
@@ -189,22 +210,38 @@ function LiveTrafficStream() {
 
         return "Disconnected";
       });
+
+      // Explain unexpected disconnections.
+      setConnectionMessage((previous) => {
+        if (previous !== null) {
+          return previous;
+        }
+
+        // Normal demo completion doesn't need an error message.
+        if (mode === "demo") {
+          return null;
+        }
+
+        return (
+          "The live connection was closed. " +
+          "You can reconnect without losing your session data."
+        );
+      });
     };
   }
 
-  // Stop the active stream manually.
   function stopStream() {
     manuallyStoppedRef.current = true;
 
     const socket = socketRef.current;
 
     if (socket !== null) {
-      // Clear the reference before closing.
       socketRef.current = null;
       socket.close();
     }
 
     setStatus("Disconnected");
+    setConnectionMessage(null);
   }
 
   // Disconnect when leaving the Live Stream page.
@@ -292,10 +329,22 @@ function LiveTrafficStream() {
             type="button"
             className="capture-refresh-button"
             disabled={streaming}
-            onClick={startStream}
+            onClick={() => startStream(false)}
           >
             <Play size={16} />
-            {mode === "demo" ? "Start Demo Stream" : "Start Live Stream"}
+            {mode === "demo" ? "Start Demo Stream" : "Start New Stream"}
+          </button>
+
+          <button
+            type="button"
+            className="capture-refresh-button"
+            disabled={
+              streaming || !hasConnectedBefore || status === "Completed"
+            }
+            onClick={() => startStream(true)}
+          >
+            <Radio size={16} />
+            Reconnect
           </button>
 
           <button
@@ -324,6 +373,10 @@ function LiveTrafficStream() {
             setStatus("Disconnected");
             setPackets([]);
             setPacketsSent(0);
+            setTotalPacketsReceived(0);
+            setTotalSessionBytes(0);
+            setConnectionMessage(null);
+            setHasConnectedBefore(false);
           }}
         >
           <Play size={16} />
@@ -342,6 +395,10 @@ function LiveTrafficStream() {
             setStatus("Disconnected");
             setPackets([]);
             setPacketsSent(0);
+            setTotalPacketsReceived(0);
+            setTotalSessionBytes(0);
+            setConnectionMessage(null);
+            setHasConnectedBefore(false);
           }}
         >
           <Radio size={16} />
@@ -437,10 +494,11 @@ function LiveTrafficStream() {
       </section>
 
       {/* WebSocket connection errors. */}
-      {status === "Error" && (
+
+      {/* Connection errors and unexpected disconnections. */}
+      {connectionMessage && (
         <p role="alert" className="capture-error">
-          WebSocket connection failed. Check that FastAPI is running on port
-          8000.
+          {connectionMessage}
         </p>
       )}
 
