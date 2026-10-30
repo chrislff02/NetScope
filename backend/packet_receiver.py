@@ -5,6 +5,8 @@ import json
 import os
 import stat
 import socket
+import errno
+import fcntl
 
 from datetime import datetime
 from pathlib import Path
@@ -284,6 +286,143 @@ def make_limited_handler(
     return limited_handler
 
 
+def acquire_receiver_lock(directory):
+    """
+    Prevent multiple NetScope receivers from starting
+    or recovering the same socket simultaneously.
+
+    Keep the returned descriptor open for the entire
+    receiver lifetime.
+    """
+
+    lock_path = directory / "netscope.lock"
+
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+
+    # Restrict newly created lock files to their owner.
+    descriptor = os.open(lock_path, flags, 0o600)
+
+    try:
+        info = os.fstat(descriptor)
+
+        # Reject unexpected file types, owners, or modes.
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+        ):
+            raise RuntimeError(
+                "Receiver lock file has unsafe ownership "
+                "or permissions."
+            )
+
+        try:
+            fcntl.flock(
+                descriptor,
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+
+        except BlockingIOError as error:
+            raise RuntimeError(
+                "Another NetScope receiver holds "
+                "the startup lock."
+            ) from error
+
+        return descriptor
+
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def recover_stale_socket(socket_path):
+    """
+    Recover an unused Unix socket only when it can
+    be verified as stale.
+
+    Must be called while holding the receiver lock.
+    """
+
+    try:
+        info = socket_path.lstat()
+    except FileNotFoundError:
+        # No existing socket needs recovery.
+        return False
+
+    # Refuse symbolic links, ordinary files, and
+    # any other unexpected filesystem entry.
+    if not stat.S_ISSOCK(info.st_mode):
+        raise RuntimeError(
+            "Socket path contains a non-socket entry."
+        )
+
+    # Only inspect sockets owned by the current user.
+    if info.st_uid != os.getuid():
+        raise RuntimeError(
+            "Existing socket has an unexpected owner."
+        )
+
+    # Require the expected private socket permissions.
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        raise RuntimeError(
+            "Existing socket has unsafe permissions."
+        )
+
+    original_identity = (info.st_dev, info.st_ino)
+
+    # Attempt to connect to the existing socket.
+    with socket.socket(
+        socket.AF_UNIX,
+        socket.SOCK_STREAM,
+    ) as probe:
+        probe.settimeout(0.5)
+
+        try:
+            probe.connect(str(socket_path))
+
+        except OSError as error:
+            if error.errno == errno.ENOENT:
+                # The socket disappeared during inspection.
+                return False
+
+            if error.errno != errno.ECONNREFUSED:
+                # Permission errors, timeouts, and uncertain
+                # states must not trigger automatic deletion.
+                raise RuntimeError(
+                    "Could not safely verify the existing "
+                    "Unix socket."
+                ) from error
+
+        else:
+            # A successful connection indicates that some
+            # process is accepting connections.
+            raise RuntimeError(
+                "An active Unix socket listener already "
+                "exists."
+            )
+
+    # Connection was refused. Recheck the socket's
+    # filesystem identity before attempting removal.
+    current = socket_path.lstat()
+
+    if (
+        not stat.S_ISSOCK(current.st_mode)
+        or current.st_uid != os.getuid()
+        or (current.st_dev, current.st_ino)
+        != original_identity
+    ):
+        raise RuntimeError(
+            "Socket changed during stale-socket recovery."
+        )
+
+    # Remove the verified stale socket.
+    socket_path.unlink()
+
+    print("Recovered stale NetScope Unix socket.")
+
+    return True
+
+
 def remove_owned_socket(socket_path, original_identity):
     """
     Remove a socket only if its device and inode
@@ -311,17 +450,18 @@ def remove_owned_socket(socket_path, original_identity):
     socket_path.unlink()
 
 
+
 async def start_receiver(on_packet=None, ready_event=None):
     """
-    Start a private Unix domain socket server.
+    Start NetScope's private Unix socket receiver.
 
-    Bind the socket directly to avoid asyncio's automatic
-    removal of an existing Unix socket path.
+    Recover verified stale sockets while protecting
+    active receivers with an exclusive file lock.
     """
 
     directory = SOCKET_PATH.parent
 
-    # Verify the directory is not a symbolic link.
+    # Reject symbolic-link data directories.
     if directory.is_symlink():
         raise RuntimeError(
             "Data directory must not be a symbolic link."
@@ -334,7 +474,7 @@ async def start_receiver(on_packet=None, ready_event=None):
 
     directory_stat = directory.stat()
 
-    # Verify ownership and directory permissions.
+    # Verify ownership and private permissions.
     if directory_stat.st_uid != os.getuid():
         raise RuntimeError(
             "Data directory owner is incorrect."
@@ -345,43 +485,50 @@ async def start_receiver(on_packet=None, ready_event=None):
             "Data directory must have 700 permissions."
         )
 
-    # Refuse an existing file, socket, or symbolic link.
-    if SOCKET_PATH.is_symlink() or os.path.lexists(SOCKET_PATH):
-        raise RuntimeError(
-            "Socket path already exists. "
-            "Check for another receiver."
-        )
-
-    # Create the underlying Unix socket ourselves.
-    listener = socket.socket(
-        socket.AF_UNIX,
-        socket.SOCK_STREAM,
-    )
+    # Obtain the exclusive receiver lock before
+    # inspecting or modifying the socket path.
+    lock_descriptor = acquire_receiver_lock(directory)
 
     server = None
+    listener = None
     socket_identity = None
 
-    previous_umask = os.umask(0o177)
-
     try:
-        # Bind does not automatically unlink an existing path.
-        listener.bind(str(SOCKET_PATH))
+        # Recover only a verified stale Unix socket.
+        recover_stale_socket(SOCKET_PATH)
 
-        # Remember the socket's filesystem identity.
-        socket_info = SOCKET_PATH.lstat()
-        socket_identity = (
-            socket_info.st_dev,
-            socket_info.st_ino,
+        # Create the underlying socket ourselves.
+        listener = socket.socket(
+            socket.AF_UNIX,
+            socket.SOCK_STREAM,
         )
 
-        # Restrict access to the owning user.
-        os.chmod(SOCKET_PATH, 0o600)
+        # Use private permissions while creating
+        # the socket filesystem entry.
+        previous_umask = os.umask(0o177)
 
-        # Prepare for incoming connections.
+        try:
+            # Binding creates the socket path.
+            listener.bind(str(SOCKET_PATH))
+
+            socket_info = SOCKET_PATH.lstat()
+
+            socket_identity = (
+                socket_info.st_dev,
+                socket_info.st_ino,
+            )
+
+            # Restrict access to the owning user.
+            os.chmod(SOCKET_PATH, 0o600)
+
+        finally:
+            # Restore the original process umask.
+            os.umask(previous_umask)
+
         listener.listen(5)
         listener.setblocking(False)
 
-        # Pass the already-bound socket to asyncio.
+        # Pass the pre-bound socket to asyncio.
         server = await asyncio.start_unix_server(
             make_limited_handler(
                 max_connections=MAX_CONNECTIONS,
@@ -394,42 +541,43 @@ async def start_receiver(on_packet=None, ready_event=None):
         # asyncio now owns the listener.
         listener = None
 
-    finally:
-        os.umask(previous_umask)
-
-        # If startup failed, close our remaining socket.
-        if server is None:
-            listener.close()
-
-            if socket_identity is not None:
-                remove_owned_socket(
-                    SOCKET_PATH,
-                    socket_identity,
-                )
-    
-    try:
         print("===== NetScope Packet Receiver =====")
         print(f"Socket: {SOCKET_PATH}")
         print("Listening for local packet metadata...")
+        print("NetScope packet receiver is ready.")
 
         async with server:
-            # Inform FastAPI that the receiver is ready.
+            # Inform FastAPI that startup succeeded.
             if ready_event is not None:
                 ready_event.set()
 
-            # Keep accepting local connections.
             await server.serve_forever()
 
-
     finally:
-        server.close()
-        await server.wait_closed()
+        # Close an untransferred socket if startup failed.
+        if listener is not None:
+            listener.close()
+
+        # Stop the asyncio server if it was created.
+        if server is not None:
+            server.close()
+            await server.wait_closed()
 
         # Remove only the socket created by this process.
-        remove_owned_socket(
-            SOCKET_PATH,
-            socket_identity,
-        )
+        if socket_identity is not None:
+            remove_owned_socket(
+                SOCKET_PATH,
+                socket_identity,
+            )
+
+        # Release the lock after socket cleanup.
+        try:
+            fcntl.flock(
+                lock_descriptor,
+                fcntl.LOCK_UN,
+            )
+        finally:
+            os.close(lock_descriptor)
 
 
 if __name__ == "__main__":

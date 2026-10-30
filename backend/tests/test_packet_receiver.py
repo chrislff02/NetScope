@@ -347,10 +347,11 @@ def test_socket_directory_permissions():
         assert directory_info.st_uid == os.getuid()
 
 
+
 def test_existing_socket_cannot_be_replaced(monkeypatch):
     """
-    Verify that starting another receiver does not
-    replace an existing Unix socket.
+    Verify that starting another receiver cannot
+    replace an active Unix socket listener.
     """
 
     import packet_receiver
@@ -362,21 +363,27 @@ def test_existing_socket_cannot_be_replaced(monkeypatch):
 
         socket_path = Path(temporary_directory) / "test.sock"
 
-        # Create an existing socket at the target path.
+        # Create an active Unix socket listener.
         with socket.socket(
             socket.AF_UNIX,
             socket.SOCK_STREAM,
         ) as existing_socket:
 
             existing_socket.bind(str(socket_path))
+            os.chmod(socket_path, 0o600)
 
+            # Mark the existing socket as actively listening.
+            existing_socket.listen(1)
+
+            # Remember the original socket's identity.
             original_info = socket_path.lstat()
+
             original_identity = (
                 original_info.st_dev,
                 original_info.st_ino,
             )
 
-            # Redirect the receiver to our temporary socket.
+            # Redirect NetScope to our temporary socket.
             monkeypatch.setattr(
                 packet_receiver,
                 "SOCKET_PATH",
@@ -384,12 +391,13 @@ def test_existing_socket_cannot_be_replaced(monkeypatch):
             )
 
             async def run_test():
+                # A second receiver must refuse startup.
                 with pytest.raises(RuntimeError):
                     await packet_receiver.start_receiver()
 
             asyncio.run(run_test())
 
-            # The existing socket must remain unchanged.
+            # The existing socket must not be replaced.
             current_info = socket_path.lstat()
 
             assert stat.S_ISSOCK(current_info.st_mode)
@@ -398,7 +406,6 @@ def test_existing_socket_cannot_be_replaced(monkeypatch):
                 current_info.st_dev,
                 current_info.st_ino,
             ) == original_identity
-
 
 @pytest.mark.parametrize(
     "limit",
@@ -739,3 +746,109 @@ def test_limited_unix_receiver_broadcasts(sample_packet):
                 socket_path.unlink(missing_ok=True)
 
         asyncio.run(run_test())
+
+
+def test_recovers_stale_unix_socket():
+    """
+    Verify that NetScope can remove a stale Unix socket.
+    """
+
+    from packet_receiver import recover_stale_socket
+
+    # Use a short path to avoid macOS AF_UNIX limits.
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "stale.sock"
+
+        # Create a socket without an active listener.
+        with socket.socket(
+            socket.AF_UNIX,
+            socket.SOCK_STREAM,
+        ) as listener:
+            listener.bind(str(socket_path))
+            os.chmod(socket_path, 0o600)
+
+        # The socket file remains after the socket closes.
+        assert socket_path.exists()
+
+        # NetScope should detect and remove the stale socket.
+        assert recover_stale_socket(socket_path) is True
+
+        assert not socket_path.exists()
+
+
+def test_does_not_remove_active_socket():
+    """
+    Verify that NetScope cannot remove an active
+    Unix domain socket listener.
+    """
+
+    from packet_receiver import recover_stale_socket
+
+    # Use a short temporary path on macOS.
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "active.sock"
+
+        with socket.socket(
+            socket.AF_UNIX,
+            socket.SOCK_STREAM,
+        ) as listener:
+            listener.bind(str(socket_path))
+            os.chmod(socket_path, 0o600)
+
+            # Make this an active listening socket.
+            listener.listen(1)
+
+            # Recovery must refuse an active listener.
+            with pytest.raises(RuntimeError):
+                recover_stale_socket(socket_path)
+
+            # The original socket must remain untouched.
+            assert socket_path.exists()
+            assert stat.S_ISSOCK(socket_path.lstat().st_mode)
+
+def test_rejects_non_socket_entries(tmp_path):
+    from packet_receiver import recover_stale_socket
+
+    file_path = tmp_path / "ordinary-file"
+    file_path.write_text("Do not remove me")
+
+    with pytest.raises(RuntimeError):
+        recover_stale_socket(file_path)
+
+    assert file_path.read_text() == "Do not remove me"
+
+
+def test_receiver_lock_prevents_duplicate_acquisition(tmp_path):
+    from packet_receiver import acquire_receiver_lock
+    import fcntl
+
+    os.chmod(tmp_path, 0o700)
+
+    first = acquire_receiver_lock(tmp_path)
+
+    try:
+        with pytest.raises(RuntimeError):
+            acquire_receiver_lock(tmp_path)
+    finally:
+        fcntl.flock(first, fcntl.LOCK_UN)
+        os.close(first)
+
+    # After releasing the first lock, another
+    # receiver should be able to acquire it.
+    second = acquire_receiver_lock(tmp_path)
+
+    try:
+        assert stat.S_ISREG(
+            (tmp_path / "netscope.lock").stat().st_mode
+        )
+    finally:
+        fcntl.flock(second, fcntl.LOCK_UN)
+        os.close(second)
