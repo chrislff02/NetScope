@@ -8,10 +8,10 @@ from packet_sender import send_packet_metadata
 
 class PacketForwarder:
     """
-    Forward packet metadata in a background thread.
+    Forward packet metadata through a background worker.
 
-    Scapy can enqueue packet records without waiting
-    for Unix socket communication to complete.
+    Packets are queued without blocking Scapy.
+    Shutdown waits for delivery up to a specified deadline.
     """
 
     def __init__(
@@ -43,15 +43,25 @@ class PacketForwarder:
         self._lock = threading.Lock()
         self._running = False
 
-        # Forwarding statistics.
+        # Packet accounting.
         self.queued_packets = 0
         self.sent_packets = 0
         self.failed_packets = 0
         self.dropped_packets = 0
 
+        # Records explicitly discarded during shutdown.
+        self.shutdown_dropped_packets = 0
+
+        # Packets currently being sent by the worker.
+        self.in_flight_packets = 0
+
+        # Tracks whether the worker should abandon
+        # remaining queued records after the deadline.
+        self._abort_pending = False
+
     def start(self):
         """
-        Start the background sender thread.
+        Start the background sender exactly once.
         """
 
         with self._lock:
@@ -62,6 +72,7 @@ class PacketForwarder:
 
             self._running = True
             self.stop_event.clear()
+            self._abort_pending = False
 
             self.worker = threading.Thread(
                 target=self._run,
@@ -73,10 +84,9 @@ class PacketForwarder:
 
     def enqueue(self, packet):
         """
-        Add packet metadata without blocking Scapy.
+        Queue packet metadata without blocking capture.
 
-        Returns False if the queue is full or the
-        forwarder is not accepting new packets.
+        Return False when stopped or when the queue is full.
         """
 
         with self._lock:
@@ -85,6 +95,7 @@ class PacketForwarder:
 
             try:
                 self.packet_queue.put_nowait(packet)
+
             except queue.Full:
                 self.dropped_packets += 1
                 return False
@@ -94,10 +105,16 @@ class PacketForwarder:
 
     def _run(self):
         """
-        Send queued packets in the background.
+        Deliver queued records in the background.
         """
 
         while True:
+            with self._lock:
+                should_abort = self._abort_pending
+
+            if should_abort:
+                break
+
             if (
                 self.stop_event.is_set()
                 and self.packet_queue.empty()
@@ -105,11 +122,13 @@ class PacketForwarder:
                 break
 
             try:
-                packet = self.packet_queue.get(
-                    timeout=0.1
-                )
+                packet = self.packet_queue.get(timeout=0.1)
+
             except queue.Empty:
                 continue
+
+            with self._lock:
+                self.in_flight_packets += 1
 
             try:
                 success = self.send_function(packet)
@@ -121,20 +140,50 @@ class PacketForwarder:
                         self.failed_packets += 1
 
             except Exception:
-                # A failed send must not kill the worker.
+                # Report failures without killing the thread.
                 with self._lock:
                     self.failed_packets += 1
 
             finally:
+                with self._lock:
+                    self.in_flight_packets -= 1
+
                 self.packet_queue.task_done()
+
+    def _discard_pending(self):
+        """
+        Remove records still waiting in the queue.
+
+        This does not interrupt a send already in progress.
+        """
+
+        discarded = 0
+
+        while True:
+            try:
+                self.packet_queue.get_nowait()
+
+            except queue.Empty:
+                break
+
+            else:
+                discarded += 1
+                self.packet_queue.task_done()
+
+        with self._lock:
+            self.shutdown_dropped_packets += discarded
+
+        return discarded
 
     def stop(self, timeout=5):
         """
-        Stop accepting new packets and attempt to
-        finish sending queued packets.
+        Attempt graceful shutdown within a deadline.
 
-        Returns True if the worker stops within the
-        timeout, otherwise False.
+        Returns True only when the worker has stopped and
+        all accepted records were processed.
+
+        Returns False when the deadline expires or when
+        delivery cannot complete within that time.
         """
 
         if timeout < 0:
@@ -155,13 +204,26 @@ class PacketForwarder:
                 "Forwarder cannot join its own thread."
             )
 
+        # Allow the worker to drain the queue.
         worker.join(timeout=timeout)
 
-        return not worker.is_alive()
+        if worker.is_alive():
+            # Tell the worker not to process further records.
+            with self._lock:
+                self._abort_pending = True
+
+            # Account for records not yet sent.
+            self._discard_pending()
+
+            # An in-progress socket send can still be active.
+            # Do not block beyond the requested deadline.
+            return False
+
+        return True
 
     def get_statistics(self):
         """
-        Return a snapshot of forwarding statistics.
+        Return a thread-safe snapshot of packet accounting.
         """
 
         with self._lock:
@@ -170,10 +232,12 @@ class PacketForwarder:
                 "sent": self.sent_packets,
                 "failed": self.failed_packets,
                 "dropped": self.dropped_packets,
+                "shutdown_dropped": self.shutdown_dropped_packets,
                 "pending": self.packet_queue.qsize(),
                 "running": self._running,
                 "worker_alive": (
                     self.worker is not None
                     and self.worker.is_alive()
                 ),
+                "in_flight": self.in_flight_packets,
             }

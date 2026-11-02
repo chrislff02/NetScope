@@ -197,3 +197,103 @@ def test_forwarder_stop_timeout(sample_packet):
 
         # Calling stop again waits for the worker.
         assert forwarder.stop(timeout=3) is True
+
+
+def test_shutdown_discards_pending_packets():
+    """
+    Verify that a shutdown deadline accounts for
+    records that could not be forwarded.
+    """
+
+    import threading
+
+    sender_started = threading.Event()
+    release_sender = threading.Event()
+
+    def slow_send(packet):
+        sender_started.set()
+        release_sender.wait(timeout=3)
+        return True
+
+    forwarder = PacketForwarder(
+        max_queue_size=5,
+        send_function=slow_send,
+    )
+
+    packet = {"test": "metadata"}
+
+    forwarder.start()
+
+    try:
+        # First packet enters the sending function.
+        assert forwarder.enqueue(packet) is True
+        assert sender_started.wait(timeout=2)
+
+        # Two additional records remain queued.
+        assert forwarder.enqueue(packet) is True
+        assert forwarder.enqueue(packet) is True
+
+        # The worker cannot finish before this deadline.
+        assert forwarder.stop(timeout=0.01) is False
+
+        stats = forwarder.get_statistics()
+
+        assert stats["queued"] == 3
+        assert stats["shutdown_dropped"] == 2
+        assert stats["pending"] == 0
+
+    finally:
+        # Release the in-progress send so the worker exits.
+        release_sender.set()
+
+        assert forwarder.worker is not None
+        forwarder.worker.join(timeout=3)
+
+        assert not forwarder.worker.is_alive()
+
+
+def test_in_flight_packet_accounting():
+    """
+    Verify that packets currently being sent are
+    distinguished from pending queue records.
+    """
+
+    import threading
+
+    sender_started = threading.Event()
+    release_sender = threading.Event()
+
+    def slow_send(packet):
+        sender_started.set()
+        release_sender.wait(timeout=3)
+        return True
+
+    forwarder = PacketForwarder(
+        send_function=slow_send,
+    )
+
+    forwarder.start()
+
+    try:
+        assert forwarder.enqueue({"test": "packet"}) is True
+        assert sender_started.wait(timeout=2)
+
+        # The worker has taken the packet from the queue,
+        # but the send operation has not completed.
+        stats = forwarder.get_statistics()
+
+        assert stats["queued"] == 1
+        assert stats["pending"] == 0
+        assert stats["in_flight"] == 1
+        assert stats["sent"] == 0
+
+    finally:
+        release_sender.set()
+        assert forwarder.stop(timeout=3) is True
+
+    # The packet has now finished processing.
+    stats = forwarder.get_statistics()
+
+    assert stats["in_flight"] == 0
+    assert stats["sent"] == 1
+    assert stats["pending"] == 0

@@ -162,14 +162,18 @@ def test_live_capture_streams_packet_metadata(monkeypatch):
         def stop(self, timeout=5):
             return True
 
+        
         def get_statistics(self):
             return {
                 "queued": len(forwarded),
                 "sent": len(forwarded),
                 "failed": 0,
                 "dropped": 0,
+                "shutdown_dropped": 0,
                 "pending": 0,
+                "in_flight": 0,
             }
+
 
     # Simulate capturing one packet.
     def fake_sniff(**kwargs):

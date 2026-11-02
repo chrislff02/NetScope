@@ -159,8 +159,9 @@ def start_live_capture(
         print("Check your interface and capture permissions.")
         return
 
+
     finally:
-        # Always attempt to stop the forwarding worker.
+        # Stop forwarding even if capture ends unexpectedly.
         if forwarder is not None:
             finished = forwarder.stop(timeout=5)
             forward_stats = forwarder.get_statistics()
@@ -170,12 +171,33 @@ def start_live_capture(
             print(f"Sent: {forward_stats['sent']}")
             print(f"Failed: {forward_stats['failed']}")
             print(f"Dropped: {forward_stats['dropped']}")
+            print(
+                f"Shutdown Dropped: "
+                f"{forward_stats['shutdown_dropped']}"
+            )
             print(f"Pending: {forward_stats['pending']}")
+            print(f"In Flight: {forward_stats['in_flight']}")
+            
 
             if not finished:
                 print(
-                    "Warning: forwarding did not finish "
-                    "before the shutdown timeout."
+                    "WARNING: Forwarding stopped before "
+                    "all queued packets were delivered."
+                )
+
+            if forward_stats["failed"] > 0:
+                print(
+                    "WARNING: Some packet metadata "
+                    "could not be delivered."
+                )
+
+            if (
+                forward_stats["dropped"] > 0
+                or forward_stats["shutdown_dropped"] > 0
+            ):
+                print(
+                    "WARNING: Some packet records were "
+                    "discarded during forwarding."
                 )
 
     # Calculate statistics once after capture completes.
@@ -187,6 +209,7 @@ def start_live_capture(
         "raw_packets_captured": raw_packet_count,
         "packets": packet_records,
         "statistics": statistics,
+        "in_flight": 0,
     }
 
     # Preserve the existing secure completed-capture save.
@@ -299,3 +322,5 @@ if __name__ == "__main__":
         protocol=args.protocol,
         stream=args.stream,
     )
+
+    
