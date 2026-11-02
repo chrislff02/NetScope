@@ -7,6 +7,8 @@ import stat
 import socket
 import errno
 import fcntl
+import ctypes
+import sys
 
 from datetime import datetime
 from pathlib import Path
@@ -220,15 +222,79 @@ async def handle_connection(reader, writer, on_packet=None):
         except (ConnectionError, OSError):
             pass
 
+def get_peer_uid(writer):
+    """
+    Return the kernel-reported UID of a connected
+    Unix domain socket peer on macOS.
+
+    Raise an exception if verification is unavailable.
+    """
+
+    if sys.platform != "darwin":
+        raise RuntimeError(
+            "Unix socket peer verification requires macOS."
+        )
+
+    peer_socket = writer.get_extra_info("socket")
+
+    if peer_socket is None:
+        raise RuntimeError(
+            "The connection has no accessible socket."
+        )
+
+    # macOS provides getpeereid() through libc.
+    libc = ctypes.CDLL(None, use_errno=True)
+    getpeereid = libc.getpeereid
+
+    getpeereid.argtypes = [
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_uint),
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+
+    getpeereid.restype = ctypes.c_int
+
+    uid = ctypes.c_uint()
+    gid = ctypes.c_uint()
+
+    result = getpeereid(
+        peer_socket.fileno(),
+        ctypes.byref(uid),
+        ctypes.byref(gid),
+    )
+
+    if result != 0:
+        error_number = ctypes.get_errno()
+
+        raise OSError(
+            error_number,
+            os.strerror(error_number),
+        )
+
+    return uid.value
+
+
+def is_authorized_peer(writer):
+    """
+    Allow the receiver's user or root.
+
+    Root is permitted because NetScope's Scapy capture
+    currently runs with sudo.
+    """
+
+    peer_uid = get_peer_uid(writer)
+
+    return peer_uid in (os.getuid(), 0)
+
+
 
 def make_limited_handler(
     max_connections=MAX_CONNECTIONS,
     on_packet=None,
 ):
     """
-    Wrap the packet receiver with a connection limit.
-
-    Optionally forward validated packets to a callback.
+    Limit simultaneous connections and authenticate
+    Unix socket peers before processing packet metadata.
     """
 
     if type(max_connections) is not int or max_connections < 1:
@@ -238,41 +304,67 @@ def make_limited_handler(
 
     active_connections = 0
 
+    async def reject_connection(writer, status):
+        """
+        Return a bounded rejection response, then close.
+        """
+
+        try:
+            writer.write(
+                (json.dumps({"status": status}) + "\n").encode(
+                    "utf-8"
+                )
+            )
+
+            await asyncio.wait_for(
+                writer.drain(),
+                timeout=1,
+            )
+
+        except (
+            ConnectionError,
+            OSError,
+            asyncio.TimeoutError,
+        ):
+            pass
+
+        finally:
+            writer.close()
+
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
+
     async def limited_handler(reader, writer):
         nonlocal active_connections
 
-        # Reject connections when the receiver is at capacity.
+        # Preserve NetScope's connection limit.
         if active_connections >= max_connections:
-            try:
-                response = {"status": "busy"}
-
-                writer.write(
-                    (json.dumps(response) + "\n").encode("utf-8")
-                )
-
-                await asyncio.wait_for(
-                    writer.drain(),
-                    timeout=1,
-                )
-
-            except (ConnectionError, OSError, asyncio.TimeoutError):
-                pass
-
-            finally:
-                writer.close()
-
-                try:
-                    await writer.wait_closed()
-                except (ConnectionError, OSError):
-                    pass
-
+            await reject_connection(writer, "busy")
             return
 
-        # Reserve one connection slot.
         active_connections += 1
 
         try:
-            # Process the packet and optionally broadcast it.
+            # Authenticate the local process before
+            # reading any packet metadata.
+            try:
+                authorized = is_authorized_peer(writer)
+
+            except (OSError, RuntimeError, ValueError) as error:
+                print(
+                    "Unable to verify Unix socket peer: "
+                    f"{type(error).__name__}"
+                )
+                authorized = False
+
+            if not authorized:
+                print("Rejected unauthorized Unix socket peer.")
+                await reject_connection(writer, "unauthorized")
+                return
+
+            # Only authenticated peers can submit metadata.
             await handle_connection(
                 reader,
                 writer,
@@ -280,7 +372,7 @@ def make_limited_handler(
             )
 
         finally:
-            # Always release the connection slot.
+            # Release the connection slot, even on rejection.
             active_connections -= 1
 
     return limited_handler
@@ -563,21 +655,24 @@ async def start_receiver(on_packet=None, ready_event=None):
             server.close()
             await server.wait_closed()
 
-        # Remove only the socket created by this process.
-        if socket_identity is not None:
-            remove_owned_socket(
-                SOCKET_PATH,
-                socket_identity,
-            )
-
-        # Release the lock after socket cleanup.
+        
+        # Always release the receiver lock, even if
+        # socket cleanup encounters an error.
         try:
-            fcntl.flock(
-                lock_descriptor,
-                fcntl.LOCK_UN,
-            )
+            if socket_identity is not None:
+                remove_owned_socket(
+                    SOCKET_PATH,
+                    socket_identity,
+                )
         finally:
-            os.close(lock_descriptor)
+            try:
+                fcntl.flock(
+                    lock_descriptor,
+                    fcntl.LOCK_UN,
+                )
+            finally:
+                os.close(lock_descriptor)
+
 
 
 if __name__ == "__main__":

@@ -14,6 +14,8 @@ import pytest
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
+import packet_receiver
+
 from packet_broadcaster import PacketBroadcaster
 
 from packet_receiver import (
@@ -852,3 +854,178 @@ def test_receiver_lock_prevents_duplicate_acquisition(tmp_path):
     finally:
         fcntl.flock(second, fcntl.LOCK_UN)
         os.close(second)
+
+
+def test_authorized_unix_socket_peer(sample_packet):
+    """
+    Verify that the current macOS user can submit
+    packet metadata through a real Unix socket.
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "peer.sock"
+
+        async def run_test():
+            server = await asyncio.start_unix_server(
+                make_limited_handler(),
+                path=str(socket_path),
+            )
+
+            try:
+                reader, writer = (
+                    await asyncio.open_unix_connection(
+                        str(socket_path)
+                    )
+                )
+
+                try:
+                    message = json.dumps(sample_packet) + "\n"
+
+                    writer.write(message.encode("utf-8"))
+                    await writer.drain()
+
+                    response = await asyncio.wait_for(
+                        reader.readline(),
+                        timeout=2,
+                    )
+
+                    assert json.loads(response) == {
+                        "status": "accepted"
+                    }
+
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        asyncio.run(run_test())
+
+
+def test_rejects_unauthorized_peer(
+    monkeypatch,
+    sample_packet,
+):
+    """
+    Simulate an unauthorized UID and verify that
+    no packet is delivered to the broadcaster.
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "peer.sock"
+        published = []
+
+        # Simulate a peer belonging to another user.
+        monkeypatch.setattr(
+            packet_receiver,
+            "get_peer_uid",
+            lambda writer: -1,
+        )
+
+        async def run_test():
+            server = await asyncio.start_unix_server(
+                make_limited_handler(
+                    on_packet=published.append,
+                ),
+                path=str(socket_path),
+            )
+
+            try:
+                reader, writer = (
+                    await asyncio.open_unix_connection(
+                        str(socket_path)
+                    )
+                )
+
+                try:
+                    message = json.dumps(sample_packet) + "\n"
+
+                    writer.write(message.encode("utf-8"))
+                    await writer.drain()
+
+                    response = await asyncio.wait_for(
+                        reader.readline(),
+                        timeout=2,
+                    )
+
+                    assert json.loads(response) == {
+                        "status": "unauthorized"
+                    }
+
+                    assert published == []
+
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        asyncio.run(run_test())
+
+
+def test_rejects_unverifiable_peer(monkeypatch):
+    """
+    A failure to retrieve peer credentials must
+    reject the connection rather than grant access.
+    """
+
+    def fail_verification(writer):
+        raise OSError("Peer credentials unavailable")
+
+    monkeypatch.setattr(
+        packet_receiver,
+        "get_peer_uid",
+        fail_verification,
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="ns-",
+        dir="/tmp",
+    ) as temporary_directory:
+
+        socket_path = Path(temporary_directory) / "peer.sock"
+
+        async def run_test():
+            server = await asyncio.start_unix_server(
+                make_limited_handler(),
+                path=str(socket_path),
+            )
+
+            try:
+                reader, writer = (
+                    await asyncio.open_unix_connection(
+                        str(socket_path)
+                    )
+                )
+
+                try:
+                    response = await asyncio.wait_for(
+                        reader.readline(),
+                        timeout=2,
+                    )
+
+                    assert json.loads(response) == {
+                        "status": "unauthorized"
+                    }
+
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        asyncio.run(run_test())
