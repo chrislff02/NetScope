@@ -13,6 +13,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import logging
+from logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger("netscope.receiver")
 
 # Store the socket inside NetScope's private data directory.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -189,20 +194,28 @@ async def handle_connection(reader, writer, on_packet=None):
         if on_packet is not None:
             on_packet(packet)
 
-        print(
-            f"Accepted {packet['protocol']} packet "
-            f"({packet['size']} bytes)"
+        logger.info(
+            "Accepted %s packet (%s bytes)",
+            packet["protocol"],
+            packet["size"],
         )
 
         response = {"status": "accepted"}
 
+    
     except ValueError as error:
-        print(f"Rejected packet: {error}")
+        logger.warning(
+            "Rejected packet: %s",
+            error,
+        )
         response = {"status": "rejected"}
 
-    except Exception as error:
-        print(f"Receiver error: {type(error).__name__}")
+    except Exception:
+        logger.exception(
+            "Unexpected error handling packet metadata."
+        )
         response = {"status": "error"}
+
 
     try:
         # Return an acknowledgment.
@@ -353,14 +366,16 @@ def make_limited_handler(
                 authorized = is_authorized_peer(writer)
 
             except (OSError, RuntimeError, ValueError) as error:
-                print(
-                    "Unable to verify Unix socket peer: "
-                    f"{type(error).__name__}"
+                logger.warning(
+                    "Unable to verify Unix socket peer: %s",
+                    type(error).__name__,
                 )
                 authorized = False
 
             if not authorized:
-                print("Rejected unauthorized Unix socket peer.")
+                logger.warning(
+                    "Rejected unauthorized Unix socket peer."
+                )
                 await reject_connection(writer, "unauthorized")
                 return
 
@@ -510,7 +525,9 @@ def recover_stale_socket(socket_path):
     # Remove the verified stale socket.
     socket_path.unlink()
 
-    print("Recovered stale NetScope Unix socket.")
+    logger.info(
+        "Recovered stale NetScope Unix socket."
+    )
 
     return True
 
@@ -633,10 +650,24 @@ async def start_receiver(on_packet=None, ready_event=None):
         # asyncio now owns the listener.
         listener = None
 
-        print("===== NetScope Packet Receiver =====")
-        print(f"Socket: {SOCKET_PATH}")
-        print("Listening for local packet metadata...")
-        print("NetScope packet receiver is ready.")
+        
+        logger.info(
+            "NetScope packet receiver starting."
+        )
+
+        logger.info(
+            "Unix socket: %s",
+            SOCKET_PATH,
+        )
+
+        logger.info(
+            "Listening for local packet metadata."
+        )
+
+        logger.info(
+            "NetScope packet receiver is ready."
+        )
+
 
         async with server:
             # Inform FastAPI that startup succeeded.
