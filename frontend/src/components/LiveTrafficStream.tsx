@@ -111,6 +111,9 @@ function LiveTrafficStream() {
       return;
     }
 
+    // Track whether the server completed a demo session.
+    let completedNormally = false;
+
     socketRef.current = socket;
 
     socket.onopen = () => {
@@ -171,6 +174,7 @@ function LiveTrafficStream() {
       }
 
       if (message.event === "complete") {
+        completedNormally = true;
         setPacketsSent(message.packets_sent);
         setStatus("Completed");
         setConnectionMessage(null);
@@ -211,20 +215,21 @@ function LiveTrafficStream() {
         return "Disconnected";
       });
 
-      // Explain unexpected disconnections.
+      // Explain unexpected disconnections while keeping
+      // successfully completed demo sessions unchanged.
       setConnectionMessage((previous) => {
         if (previous !== null) {
           return previous;
         }
 
-        // Normal demo completion doesn't need an error message.
-        if (mode === "demo") {
+        if (completedNormally) {
           return null;
         }
 
         return (
-          "The live connection was closed. " +
-          "You can reconnect without losing your session data."
+          "The WebSocket connection closed unexpectedly. " +
+          "Check that FastAPI is running, then reconnect " +
+          "to preserve your session data."
         );
       });
     };
@@ -339,7 +344,9 @@ function LiveTrafficStream() {
             type="button"
             className="capture-refresh-button"
             disabled={
-              streaming || !hasConnectedBefore || status === "Completed"
+              streaming ||
+              status === "Completed" ||
+              (!hasConnectedBefore && status !== "Error")
             }
             onClick={() => startStream(true)}
           >
@@ -492,8 +499,6 @@ function LiveTrafficStream() {
           )}
         </div>
       </section>
-
-      {/* WebSocket connection errors. */}
 
       {/* Connection errors and unexpected disconnections. */}
       {connectionMessage && (
