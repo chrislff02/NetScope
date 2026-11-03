@@ -5,6 +5,12 @@ import time
 
 from packet_sender import send_packet_metadata
 
+import logging
+
+from logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger("netscope.forwarder")
 
 class PacketForwarder:
     """
@@ -140,7 +146,12 @@ class PacketForwarder:
                         self.failed_packets += 1
 
             except Exception:
-                # Report failures without killing the thread.
+                # Record unexpected sender errors without
+                # terminating the background worker.
+                logger.exception(
+                    "Unexpected error forwarding packet metadata."
+                )
+
                 with self._lock:
                     self.failed_packets += 1
 
@@ -207,17 +218,28 @@ class PacketForwarder:
         # Allow the worker to drain the queue.
         worker.join(timeout=timeout)
 
+       
         if worker.is_alive():
             # Tell the worker not to process further records.
             with self._lock:
                 self._abort_pending = True
 
             # Account for records not yet sent.
-            self._discard_pending()
+            discarded = self._discard_pending()
 
-            # An in-progress socket send can still be active.
+            logger.warning(
+                "Forwarder shutdown deadline reached. "
+                "Discarded queued packets: %s. "
+                "An in-progress send may still be active.",
+                discarded,
+            )
+
             # Do not block beyond the requested deadline.
             return False
+
+        logger.debug(
+            "Packet forwarding worker stopped successfully."
+        )
 
         return True
 

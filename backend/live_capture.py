@@ -16,6 +16,12 @@ from traffic_analysis import (
 
 from packet_forwarder import PacketForwarder
 
+import logging
+
+from logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger("netscope.capture")
 
 # Locate the main NetScope project directory.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -137,7 +143,17 @@ def start_live_capture(
     print(f"Maximum Packets: {max_packets}")
     print(f"Timeout: {timeout} seconds")
     print(f"Live Streaming: {'Enabled' if stream else 'Disabled'}")
-    print("\nListening for network traffic...\n")
+
+    logger.info(
+        "Starting capture on interface %s "
+        "(protocol=%s, max_packets=%s, timeout=%ss, stream=%s).",
+        interface,
+        protocol,
+        max_packets,
+        timeout,
+        stream,
+    )
+    
 
     bpf_filter = None if protocol == "all" else protocol
 
@@ -152,10 +168,16 @@ def start_live_capture(
         )
 
     except KeyboardInterrupt:
-        print("\nCapture stopped by user.")
+        logger.info(
+            "Network capture interrupted by user."
+        )
 
     except (OSError, PermissionError, Scapy_Exception) as error:
-        print(f"\nCapture failed: {error}")
+        logger.error(
+            "Network capture failed: %s",
+            error,
+        )
+
         print("Check your interface and capture permissions.")
         return
 
@@ -180,24 +202,33 @@ def start_live_capture(
             
 
             if not finished:
-                print(
-                    "WARNING: Forwarding stopped before "
-                    "all queued packets were delivered."
+                logger.warning(
+                    "Forwarder did not finish before "
+                    "the shutdown deadline."
                 )
 
             if forward_stats["failed"] > 0:
-                print(
-                    "WARNING: Some packet metadata "
-                    "could not be delivered."
+                logger.warning(
+                    "%s packet metadata deliveries failed.",
+                    forward_stats["failed"],
                 )
 
-            if (
-                forward_stats["dropped"] > 0
-                or forward_stats["shutdown_dropped"] > 0
-            ):
-                print(
-                    "WARNING: Some packet records were "
-                    "discarded during forwarding."
+            total_dropped = (
+                forward_stats["dropped"]
+                + forward_stats["shutdown_dropped"]
+            )
+
+            if total_dropped > 0:
+                logger.warning(
+                    "%s packet records were discarded.",
+                    total_dropped,
+                )
+
+            if forward_stats["in_flight"] > 0:
+                logger.warning(
+                    "%s packet send operation(s) were still "
+                    "in progress at shutdown.",
+                    forward_stats["in_flight"],
                 )
 
     # Calculate statistics once after capture completes.
