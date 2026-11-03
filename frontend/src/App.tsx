@@ -53,45 +53,60 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Retrieve data when the dashboard first loads.
+  // Incrementing this value triggers another API request.
+  const [retryCount, setRetryCount] = useState(0);
+
+  // Load saved capture data on startup and after retry.
   useEffect(() => {
     const controller = new AbortController();
 
-    async function loadDashboardData() {
-      try {
-        setLoading(true);
+    // Retrieve both resources from FastAPI.
+    Promise.all([
+      getTrafficSummary(controller.signal),
+      getPackets(controller.signal),
+    ])
+      .then(([summaryData, packetData]) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setSummary(summaryData);
+        setPackets(packetData.packets);
         setError(null);
-
-        const [summaryData, packetData] = await Promise.all([
-          getTrafficSummary(controller.signal),
-          getPackets(controller.signal),
-        ]);
-
-        if (!controller.signal.aborted) {
-          setSummary(summaryData);
-          setPackets(packetData.packets);
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) {
+          return;
         }
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Unable to load network traffic.",
-          );
-        }
-      } finally {
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load network traffic.",
+        );
+
+        // Clear stale saved-capture data on failure.
+        setSummary(null);
+        setPackets([]);
+      })
+      .finally(() => {
         if (!controller.signal.aborted) {
           setLoading(false);
         }
-      }
-    }
+      });
 
-    loadDashboardData();
-
+    // Cancel the request when the effect is cleaned up.
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [retryCount]);
+
+  // Retry is triggered by a user interaction.
+  function retryDashboardData() {
+    setLoading(true);
+    setError(null);
+    setRetryCount((previous) => previous + 1);
+  }
 
   // Build statistic cards using API data.
   const statistics = [
@@ -123,6 +138,16 @@ function App() {
 
   // Show the newest five packet records first.
   const recentPackets = packets.slice(-5).reverse();
+
+  // Distinguish successful empty responses
+  // from loading and API failures.
+
+  const hasProtocolData =
+    summary !== null &&
+    Object.values(summary.protocol_counts).some((count) => count > 0);
+
+  const hasTimelineData =
+    summary !== null && Object.values(summary.traffic_over_time).length > 0;
 
   return (
     <div className="app-container">
@@ -185,13 +210,28 @@ function App() {
           </div>
         </header>
 
-        {/* API status */}
-        {loading && <p role="status">Loading network traffic...</p>}
+        {/* Saved capture API status */}
+        {loading && (
+          <div className="dashboard-notice" role="status">
+            Loading saved network traffic...
+          </div>
+        )}
 
         {error && (
-          <p role="alert" style={{ color: "#fca5a5" }}>
-            Unable to load data: {error}
-          </p>
+          <div className="dashboard-notice dashboard-notice-error" role="alert">
+            <div>
+              <strong>Unable to load saved traffic data.</strong>
+              <p>{error}</p>
+            </div>
+
+            <button
+              type="button"
+              className="capture-refresh-button"
+              onClick={retryDashboardData}
+            >
+              Retry
+            </button>
+          </div>
         )}
 
         {activePage === "Dashboard" ? (
@@ -226,11 +266,25 @@ function App() {
                   </div>
                 </div>
 
-                {summary ? (
+                {hasTimelineData && summary ? (
                   <TrafficChart traffic={summary.traffic_over_time} />
                 ) : (
-                  <div className="chart-placeholder">
-                    <p>Waiting for traffic data...</p>
+                  <div className="chart-placeholder" role="status">
+                    <p>
+                      {loading
+                        ? "Loading network traffic..."
+                        : error
+                          ? "Traffic data unavailable."
+                          : "No network traffic available."}
+                    </p>
+
+                    <span>
+                      {loading
+                        ? "Retrieving saved capture statistics."
+                        : error
+                          ? "Check the backend connection and retry."
+                          : "Capture network packets to populate this chart."}
+                    </span>
                   </div>
                 )}
               </div>
@@ -244,11 +298,25 @@ function App() {
                   </div>
                 </div>
 
-                {summary ? (
+                {hasProtocolData && summary ? (
                   <ProtocolChart protocols={summary.protocol_counts} />
                 ) : (
-                  <div className="chart-placeholder">
-                    <p>Waiting for protocol data...</p>
+                  <div className="chart-placeholder" role="status">
+                    <p>
+                      {loading
+                        ? "Loading protocol statistics..."
+                        : error
+                          ? "Protocol data unavailable."
+                          : "No protocol data available."}
+                    </p>
+
+                    <span>
+                      {loading
+                        ? "Retrieving protocol distribution."
+                        : error
+                          ? "Check the backend connection and retry."
+                          : "Protocol statistics will appear after packets are captured."}
+                    </span>
                   </div>
                 )}
               </div>
@@ -298,8 +366,24 @@ function App() {
                   </tbody>
                 </table>
 
-                {!loading && !error && recentPackets.length === 0 && (
-                  <p>No packets available.</p>
+                {recentPackets.length === 0 && (
+                  <div className="explorer-empty" role="status">
+                    <p>
+                      {loading
+                        ? "Loading recent packets..."
+                        : error
+                          ? "Recent packets unavailable."
+                          : "No recent packets available."}
+                    </p>
+
+                    <span>
+                      {loading
+                        ? "Retrieving packet records."
+                        : error
+                          ? "Check the backend connection and retry."
+                          : "Capture or load packet data to display recent activity."}
+                    </span>
+                  </div>
                 )}
               </div>
             </section>

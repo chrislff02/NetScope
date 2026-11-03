@@ -49,6 +49,11 @@ function PacketExplorer({
     });
   }, [packets, search, protocol]);
 
+  // Distinguish an empty capture from filters
+  // that return no matching packets.
+  const hasPackets = packets.length > 0;
+  const hasActiveFilters = search.trim() !== "" || protocol !== "All";
+
   // Calculate how many pages we need.
   const totalPages = Math.max(1, Math.ceil(filteredPackets.length / PAGE_SIZE));
 
@@ -92,9 +97,11 @@ function PacketExplorer({
             {["All", "TCP", "UDP", "ICMP"].map((item) => (
               <button
                 key={item}
+                type="button"
                 className={`filter-button ${
                   protocol === item ? "selected" : ""
                 }`}
+                aria-pressed={protocol === item}
                 onClick={() => updateProtocol(item)}
               >
                 {item}
@@ -114,7 +121,7 @@ function PacketExplorer({
 
         {/* Packet table */}
         <div className="table-container">
-          <table>
+          <table aria-label={`${sourceLabel} packet records`}>
             <thead>
               <tr>
                 <th>Timestamp</th>
@@ -166,7 +173,27 @@ function PacketExplorer({
           </table>
 
           {visiblePackets.length === 0 && (
-            <div className="explorer-empty">No packets match your search.</div>
+            <div className="explorer-empty" role="status">
+              {!hasPackets ? (
+                <div>
+                  <p>No packet data available.</p>
+                  <span>
+                    {sourceLabel === "Live stream"
+                      ? "Start a live stream and capture network traffic to see packets here."
+                      : sourceLabel === "Demo stream"
+                        ? "Start the demo stream to receive simulated packets."
+                        : "Capture or load packet data to explore network traffic."}
+                  </span>
+                </div>
+              ) : hasActiveFilters ? (
+                <div>
+                  <p>No packets match your filters.</p>
+                  <span>Try a different search term or protocol filter.</span>
+                </div>
+              ) : (
+                <p>No packets to display.</p>
+              )}
+            </div>
           )}
         </div>
 
