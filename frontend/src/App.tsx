@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import LiveTrafficStream from "./components/LiveTrafficStream";
+import TrafficHistory from "./components/TrafficHistory";
 
 import {
   Activity,
@@ -403,6 +404,8 @@ function App() {
           <LiveCapture />
         ) : activePage === "Live Stream" ? (
           <LiveTrafficStream />
+        ) : activePage === "Traffic History" ? (
+          <TrafficHistory packets={packets} loading={loading} error={error} />
         ) : (
           <section className="panel empty-page">
             <Database size={42} />
