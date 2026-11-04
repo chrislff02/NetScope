@@ -213,28 +213,35 @@ function App() {
         </header>
 
         {/* Saved capture API status */}
-        {loading && (
-          <div className="dashboard-notice" role="status">
-            Loading saved network traffic...
-          </div>
-        )}
-
-        {error && (
-          <div className="dashboard-notice dashboard-notice-error" role="alert">
-            <div>
-              <strong>Unable to load saved traffic data.</strong>
-              <p>{error}</p>
+        {activePage !== "Live Stream" &&
+          activePage !== "Live Capture" &&
+          loading && (
+            <div className="dashboard-notice" role="status">
+              Loading saved network traffic...
             </div>
+          )}
 
-            <button
-              type="button"
-              className="capture-refresh-button"
-              onClick={retryDashboardData}
+        {activePage !== "Live Stream" &&
+          activePage !== "Live Capture" &&
+          error && (
+            <div
+              className="dashboard-notice dashboard-notice-error"
+              role="alert"
             >
-              Retry
-            </button>
-          </div>
-        )}
+              <div>
+                <strong>Unable to load saved traffic data.</strong>
+                <p>{error}</p>
+              </div>
+
+              <button
+                type="button"
+                className="capture-refresh-button"
+                onClick={retryDashboardData}
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
         {activePage === "Dashboard" ? (
           <>
