@@ -167,9 +167,11 @@ function App() {
             return (
               <button
                 key={item.label}
+                type="button"
                 className={`nav-item ${
                   activePage === item.label ? "active" : ""
                 }`}
+                aria-current={activePage === item.label ? "page" : undefined}
                 onClick={() => setActivePage(item.label)}
               >
                 <Icon size={19} />

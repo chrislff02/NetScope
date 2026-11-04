@@ -87,6 +87,7 @@ function PacketExplorer({
 
             <input
               type="text"
+              aria-label="Search packet records"
               placeholder="Search IP addresses, ports, timestamps..."
               value={search}
               onChange={(event) => updateSearch(event.target.value)}

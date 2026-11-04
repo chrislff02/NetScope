@@ -321,7 +321,7 @@ tbody tr:hover {
   }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 800px) {
   .app-container {
     flex-direction: column;
   }
@@ -765,5 +765,154 @@ tbody tr:hover {
   .dashboard-notice {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+/* Phase 6.3 — Additional responsive improvements */
+
+@media (max-width: 600px) {
+  /* Use one statistics column on narrow screens. */
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Keep chart and table panels within the viewport. */
+  .charts-grid,
+  .panel,
+  .stat-card {
+    min-width: 0;
+  }
+
+  /* Reduce panel padding on mobile devices. */
+  .panel {
+    padding: 16px;
+  }
+
+  /* Make headings more appropriate for narrow screens. */
+  .dashboard-header h1 {
+    font-size: 25px;
+  }
+
+  /* Allow capture buttons to wrap naturally. */
+  .stream-controls {
+    width: 100%;
+  }
+
+  .stream-controls button {
+    justify-content: center;
+  }
+
+  /* Let the search input fill the available width. */
+  .search-box {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Prevent protocol filters from overflowing. */
+  .protocol-filters {
+    width: 100%;
+  }
+
+  .explorer-summary {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* Allow connection information to wrap. */
+  .capture-info {
+    gap: 10px;
+    padding: 12px;
+  }
+}
+
+/* Mobile navigation improvements */
+
+@media (max-width: 800px) {
+  .sidebar-nav {
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 8px;
+  }
+
+  .nav-item {
+    white-space: nowrap;
+  }
+
+  .sidebar-logo {
+    padding-left: 4px;
+  }
+
+  .dashboard-header {
+    gap: 12px;
+    margin-bottom: 22px;
+  }
+}
+
+/* Keyboard accessibility */
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+.clickable-row:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 3px;
+}
+
+.nav-item:focus-visible {
+  outline-offset: -2px;
+}
+
+.clickable-row:focus-visible {
+  background: #25334b;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* Responsive packet tables */
+
+.table-container {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.table-container table {
+  min-width: 650px;
+}
+
+.table-container th,
+.table-container td {
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .table-container th,
+  .table-container td {
+    padding: 12px 10px;
+  }
+}
+
+/* Responsive network charts */
+
+.chart-wrapper {
+  max-width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 600px) {
+  .chart-wrapper {
+    height: 240px;
+  }
+
+  .chart-placeholder {
+    min-height: 200px;
+    height: auto;
+    padding: 20px;
+    text-align: center;
   }
 }
