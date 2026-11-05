@@ -12,6 +12,14 @@ __pycache__/
 .env
 .env.*
 
+# Local runtime files
+data/netscope.sock
+data/netscope.lock
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
 # React / Node.js
 node_modules/
 dist/
@@ -23,4 +31,5 @@ dist/
 .vscode/
 
 # Local network capture output
-data/
+data/*
+!data/.gitkeep
