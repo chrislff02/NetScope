@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import LiveTrafficStream from "./components/LiveTrafficStream";
 import TrafficHistory from "./components/TrafficHistory";
 import SecurityAlerts from "./components/SecurityAlerts";
+import SettingsPage from "./components/SettingsPage";
 
 import {
   Activity,
@@ -42,9 +43,46 @@ const navigation = [
   { label: "Settings", icon: Settings },
 ];
 
+const COMPACT_TABLES_KEY = "netscope-compact-tables";
+const REDUCE_MOTION_KEY = "netscope-reduce-motion";
+
+function readBooleanPreference(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) === "true";
+  } catch {
+    // Fall back to defaults if browser storage is unavailable.
+    return false;
+  }
+}
+
 function App() {
   // Track the selected sidebar page.
   const [activePage, setActivePage] = useState("Dashboard");
+
+  // Browser-specific display preferences.
+  const [compactTables, setCompactTables] = useState(() =>
+    readBooleanPreference(COMPACT_TABLES_KEY),
+  );
+
+  const [reduceMotion, setReduceMotion] = useState(() =>
+    readBooleanPreference(REDUCE_MOTION_KEY),
+  );
+
+  // Save preference changes for future visits.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COMPACT_TABLES_KEY, String(compactTables));
+      window.localStorage.setItem(REDUCE_MOTION_KEY, String(reduceMotion));
+    } catch {
+      // Settings still work for this session
+      // if browser storage is unavailable.
+    }
+  }, [compactTables, reduceMotion]);
+
+  function resetDisplayPreferences() {
+    setCompactTables(false);
+    setReduceMotion(false);
+  }
 
   // Store network information returned by FastAPI.
   const [summary, setSummary] = useState<TrafficSummary | null>(null);
@@ -152,7 +190,15 @@ function App() {
     summary !== null && Object.values(summary.traffic_over_time).length > 0;
 
   return (
-    <div className="app-container">
+    <div
+      className={[
+        "app-container",
+        compactTables ? "compact-tables" : "",
+        reduceMotion ? "reduce-motion" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-logo">
@@ -409,6 +455,17 @@ function App() {
           <TrafficHistory packets={packets} loading={loading} error={error} />
         ) : activePage === "Security Alerts" ? (
           <SecurityAlerts packets={packets} loading={loading} error={error} />
+        ) : activePage === "Settings" ? (
+          <SettingsPage
+            compactTables={compactTables}
+            reduceMotion={reduceMotion}
+            onCompactTablesChange={setCompactTables}
+            onReduceMotionChange={setReduceMotion}
+            onReset={resetDisplayPreferences}
+            packetCount={packets.length}
+            loading={loading}
+            error={error}
+          />
         ) : (
           <section className="panel empty-page">
             <Database size={42} />

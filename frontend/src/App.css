@@ -1122,3 +1122,170 @@ button:disabled {
     padding: 14px;
   }
 }
+
+/* Phase 7.3 — Settings */
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-width: 0;
+}
+
+.settings-options {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-option {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 0;
+  cursor: pointer;
+}
+
+.settings-option + .settings-option {
+  border-top: 1px solid #293449;
+}
+
+.settings-option-icon {
+  display: flex;
+  color: #60a5fa;
+}
+
+.settings-option-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.settings-option-text strong {
+  color: #f1f5f9;
+  font-size: 14px;
+}
+
+.settings-option-text > span {
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.settings-option input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: #3b82f6;
+  cursor: pointer;
+}
+
+.settings-option input:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 4px;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.settings-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.settings-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  padding: 18px;
+  background: #111b2d;
+  border: 1px solid #334155;
+  border-radius: 9px;
+}
+
+.settings-info-item svg {
+  color: #60a5fa;
+}
+
+.settings-info-item span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.settings-info-item strong {
+  color: #f1f5f9;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.settings-note h3 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+
+.settings-note p {
+  margin: 10px 0;
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* Compact table preference */
+
+.app-container.compact-tables .table-container th {
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.app-container.compact-tables .table-container td {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+/* Reduced animation preference */
+
+.app-container.reduce-motion *,
+.app-container.reduce-motion *::before,
+.app-container.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Also respect the operating system's motion preference. */
+
+@media (prefers-reduced-motion: reduce) {
+  .app-container *,
+  .app-container *::before,
+  .app-container *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .settings-info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-option {
+    gap: 12px;
+  }
+
+  .settings-option-icon {
+    display: none;
+  }
+
+  .settings-actions {
+    justify-content: flex-start;
+  }
+}
