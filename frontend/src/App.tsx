@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import LiveTrafficStream from "./components/LiveTrafficStream";
 import TrafficHistory from "./components/TrafficHistory";
+import SecurityAlerts from "./components/SecurityAlerts";
 
 import {
   Activity,
@@ -406,6 +407,8 @@ function App() {
           <LiveTrafficStream />
         ) : activePage === "Traffic History" ? (
           <TrafficHistory packets={packets} loading={loading} error={error} />
+        ) : activePage === "Security Alerts" ? (
+          <SecurityAlerts packets={packets} loading={loading} error={error} />
         ) : (
           <section className="panel empty-page">
             <Database size={42} />
